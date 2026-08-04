@@ -6,7 +6,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 from torch.optim import AdamW
 
-from data.dataset import CambridgeBridgeDataset
+from utils.dataset import CambridgeBridgeDataset
 from models.builder import build_model_and_processor
 from utils.engine import train_one_epoch, evaluate
 
