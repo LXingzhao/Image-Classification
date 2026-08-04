@@ -1,3 +1,4 @@
+# data/dataset.py
 import os
 from PIL import Image
 from torch.utils.data import Dataset
@@ -25,7 +26,12 @@ class CambridgeBridgeDataset(Dataset):
         img_path, label = self.samples[idx]
         try:
             image = Image.open(img_path).convert("RGB")
-            pixel_values = self.processor(images=image, return_tensors="pt")['pixel_values'].squeeze(0)
+            # 兼容 ViTImageProcessor 和 torchvision transform
+            processed = self.processor(images=image, return_tensors="pt")
+            if isinstance(processed, dict):
+                pixel_values = processed['pixel_values'].squeeze(0)
+            else:
+                pixel_values = processed
             return pixel_values, label
         except Exception as e:
             print(f"警告: 无法加载图片 {img_path}, 错误: {e}")
