@@ -1,0 +1,72 @@
+# ==========================================
+# 1. 项目专属数据与训练产出（重点！）
+# ==========================================
+# 忽略数据集目录（数据通常极大，不应入库）
+data/
+
+# 忽略所有的训练产出、日志、权重
+outputs/
+checkpoints/
+weights/
+logs/
+runs/
+output/
+result/
+best_vit_bridge_model/
+best_vit_gyu_model/
+
+# 可视化工具日志 (TensorBoard / WandB)
+*.out
+*.log
+tensorboard/
+wandb/
+.wandb/
+
+# 忽略所有模型权重文件和大文件
+*.pth
+*.pt
+*.ckpt
+*.bin
+*.safetensors
+*.onnx
+*.engine
+*.tflite
+
+# 忽略 HuggingFace / timm / PyTorch 的本地权重缓存
+.cache/
+huggingface/
+
+# ==========================================
+# 2. Python 运行环境与编译缓存
+# ==========================================
+# 虚拟环境
+.venv/
+venv/
+env/
+ENV/
+
+# PyTorch & Python 字节码缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Jupyter Notebook 临时文件
+.ipynb_checkpoints/
+
+# ==========================================
+# 3. 编辑器 & 开发者配置文件
+# ==========================================
+# IDE 配置
+.vscode/
+.idea/
+*.swp
+*~
+
+# 环境与密钥文件（防止私密 Token 泄漏）
+.env
+.env.local
+
+# 系统保留文件
+.DS_Store
+Thumbs.db
