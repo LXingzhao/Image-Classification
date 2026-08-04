@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader, random_split
 from sklearn.metrics import classification_report, accuracy_score
 from tqdm import tqdm
 
-from data.dataset import CambridgeBridgeDataset
+from utils.dataset import CambridgeBridgeDataset
 from models.builder import build_model_and_processor
 
 def main():
