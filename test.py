@@ -56,11 +56,17 @@ def main():
     test_loader = DataLoader(test_dataset, batch_size=base_cfg['train']['batch_size'], shuffle=False)
     print(f"测试集准备就绪，共包含样本数: {len(test_dataset)}")
 
-    # 4. 加载微调好的模型
+# 4. 加载微调好的模型
     if os.path.exists(os.path.join(ckpt_dir, "config.json")):
-        # 如果是 HuggingFace 格式 saved_pretrained 保存的模型
+        # 如果是 HuggingFace ViT 格式
         from transformers import ViTForImageClassification
-        model = ViTForImageClassification.from_pretrained(ckpt_dir).to(device)
+        model = ViTForImageClassification.from_pretrained(
+            ckpt_dir,
+            num_labels=num_classes,
+            ignore_mismatched_sizes=True, # 防止分类头尺寸冲突
+            id2label={i: name for i, name in enumerate(class_names)},
+            label2id={name: i for i, name in enumerate(class_names)}
+        ).to(device)
     else:
         # 如果是 PyTorch 通用 state_dict (.pth)
         model, _ = build_model_and_processor(model_cfg['model']['name'], num_classes, class_names)
@@ -77,8 +83,13 @@ def main():
     with torch.no_grad():
         for images, labels in tqdm(test_loader, desc="Testing"):
             images = images.to(device)
-            outputs = model(pixel_values=images) if hasattr(outputs := model(images), 'logits') else outputs
-            logits = outputs.logits if hasattr(outputs, 'logits') else outputs
+            
+            # --- 修复核心：统一前向传播，优雅兼容 ViT 与 CNN ---
+            if hasattr(model, "config") and "vit" in model.config.model_type.lower():
+                outputs = model(pixel_values=images)
+                logits = outputs.logits
+            else:
+                logits = model(images)
             
             preds = logits.argmax(-1).cpu().tolist()
             all_preds.extend(preds)
