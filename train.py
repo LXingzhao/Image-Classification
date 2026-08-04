@@ -14,7 +14,7 @@ def main():
     # 1. 加载配置文件
     with open("configs/base_config.yaml", "r", encoding="utf-8") as f:
         base_cfg = yaml.safe_load(f)
-    with open("configs/vit/vit_base.yaml", "r", encoding="utf-8") as f:
+    with open("configs/cnn/resnet50.yaml", "r", encoding="utf-8") as f:
         model_cfg = yaml.safe_load(f)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
