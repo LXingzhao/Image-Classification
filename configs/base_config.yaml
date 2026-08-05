@@ -1,3 +1,4 @@
+# configs/base_config.yaml
 seed: 42
 data:
   dir: "data/CambridgeBridgeDataset"
