@@ -1,7 +1,8 @@
-# test.py
+#test.py
 import os
 import yaml
 import torch
+import argparse
 from torch.utils.data import DataLoader, random_split
 from sklearn.metrics import classification_report, accuracy_score
 from tqdm import tqdm
@@ -10,37 +11,56 @@ from utils.dataset import CambridgeBridgeDataset
 from models.builder import build_model_and_processor
 
 def main():
-    # 1. 读取全局配置与模型配置
+    # 0. 增加命令行参数解析，动态接收配置文件与自定义权重路径
+    parser = argparse.ArgumentParser(description="评估模型在测试集上的表现")
+    parser.add_argument("--config", type=str, required=True, help="模型配置文件路径 (例如 configs/vit/vit_base.yaml)")
+    parser.add_argument("--ckpt_dir", type=str, default=None, help="手动指定权重保存目录路径")
+    args = parser.parse_args()
+
+    # 1. 读取全局配置与命令行指定的模型配置
     with open("configs/base_config.yaml", "r", encoding="utf-8") as f:
         base_cfg = yaml.safe_load(f)
 
-    # with open("configs/vit/vit_base.yaml", "r", encoding="utf-8") as f:          # 1、ViT-Base  配置文件
-    #     model_cfg = yaml.safe_load(f)
-
-    with open("configs/cnn/resnet50.yaml", "r", encoding="utf-8") as f:        # 2、ResNet50  配置文件
+    with open(args.config, "r", encoding="utf-8") as f:
         model_cfg = yaml.safe_load(f)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"正在使用设备进行测试: {device}")
 
     # 2. 定位保存的最佳模型路径
-    # 默认读取最近一次生成的 checkpoints，你也可以手动填入具体文件夹路径
     exp_name = f"{model_cfg['model']['type']}_base_exp1"
-    # 这里也可以替换为具体的日期文件夹，如 "outputs/2026-08-04/vit_base_exp1/checkpoints"
-    ckpt_dir = os.path.join("outputs", "latest", exp_name, "checkpoints") 
     
-    # 如果没找到 latest 链接，就提示输入或指定路径
+    if args.ckpt_dir is not None:
+        ckpt_dir = args.ckpt_dir
+    else:
+        # 优先尝试从 outputs/latest 路径获取
+        ckpt_dir = os.path.join("outputs", "latest", exp_name, "checkpoints") 
+        
+        # 若 latest 路径不存在，遍历 outputs 下所有日期目录，倒序寻找包含当前 exp_name 的最新路径
+        if not os.path.exists(ckpt_dir):
+            outputs_root = "outputs"
+            if os.path.exists(outputs_root):
+                all_dates = sorted([d for d in os.listdir(outputs_root) if os.path.isdir(os.path.join(outputs_root, d))], reverse=True)
+                for date_dir in all_dates:
+                    target_path = os.path.join(outputs_root, date_dir, exp_name, "checkpoints")
+                    if os.path.exists(target_path):
+                        ckpt_dir = target_path
+                        break
+
+    # 严谨校验：如果依然找不到对应的权重目录，直接拦截并给出明确提示
     if not os.path.exists(ckpt_dir):
-        # 寻找 outputs 目录下最新的实验输出
-        outputs_root = "outputs"
-        all_dates = sorted([d for d in os.listdir(outputs_root) if os.path.isdir(os.path.join(outputs_root, d))])
-        if all_dates:
-            latest_date = all_dates[-1]
-            ckpt_dir = os.path.join(outputs_root, latest_date, exp_name, "checkpoints")
+        raise FileNotFoundError(
+            f"\n[错误] 未找到模型【{model_cfg['model']['type']}】的权重目录: {ckpt_dir}\n"
+            f"原因: 你可能还没有训练过该模型！\n"
+            f"解决方法:\n"
+            f"1. 请先运行训练命令生成对应的 ViT 权重:\n"
+            f"   python train.py --config {args.config}\n"
+            f"2. 或通过 --ckpt_dir 手动指定正确的 checkpoints 文件夹路径。"
+        )
 
     print(f"即将从以下路径加载最佳模型权重: {ckpt_dir}")
 
-    # 3. 准备数据集与测试集划分（必须使用与训练集完全相同的随机种子 42）
+    # 3. 准备数据集与测试集划分（使用与训练完全相同的随机种子）
     _, processor = build_model_and_processor(model_cfg['model']['name'], num_classes=2, class_names=[])
     full_dataset = CambridgeBridgeDataset(base_cfg['data']['dir'], processor)
     
@@ -52,7 +72,6 @@ def main():
     val_size = int(base_cfg['data']['val_split'] * total_size)
     test_size = total_size - train_size - val_size
 
-    # 使用相同的 manual_seed(42)，保证切分出的 test_dataset 与训练时完全一致！
     _, _, test_dataset = random_split(
         full_dataset, [train_size, val_size, test_size],
         generator=torch.Generator().manual_seed(base_cfg['seed'])
@@ -61,19 +80,19 @@ def main():
     test_loader = DataLoader(test_dataset, batch_size=base_cfg['train']['batch_size'], shuffle=False)
     print(f"测试集准备就绪，共包含样本数: {len(test_dataset)}")
 
-# 4. 加载微调好的模型
+    # 4. 加载微调好的模型权重
     if os.path.exists(os.path.join(ckpt_dir, "config.json")):
-        # 如果是 HuggingFace ViT 格式
+        # HuggingFace ViT 格式加载
         from transformers import ViTForImageClassification
         model = ViTForImageClassification.from_pretrained(
             ckpt_dir,
             num_labels=num_classes,
-            ignore_mismatched_sizes=True, # 防止分类头尺寸冲突
+            ignore_mismatched_sizes=True,
             id2label={i: name for i, name in enumerate(class_names)},
             label2id={name: i for i, name in enumerate(class_names)}
         ).to(device)
     else:
-        # 如果是 PyTorch 通用 state_dict (.pth)
+        # PyTorch 通用 state_dict (.pth) 加载
         model, _ = build_model_and_processor(model_cfg['model']['name'], num_classes, class_names)
         best_pth = os.path.join(ckpt_dir, "best.pth")
         model.load_state_dict(torch.load(best_pth, map_location=device))
@@ -89,7 +108,7 @@ def main():
         for images, labels in tqdm(test_loader, desc="Testing"):
             images = images.to(device)
             
-            # --- 修复核心：统一前向传播，优雅兼容 ViT 与 CNN ---
+            # 统一前向传播，优雅兼容 ViT 与 CNN
             if hasattr(model, "config") and "vit" in model.config.model_type.lower():
                 outputs = model(pixel_values=images)
                 logits = outputs.logits
@@ -100,7 +119,7 @@ def main():
             all_preds.extend(preds)
             all_labels.extend(labels.tolist())
 
-    # 6. 打印并输出标准评估报告
+    # 6. 打印输出标准评估报告
     print("\n" + "="*20 + " 最终评估结果 " + "="*20)
     print(classification_report(all_labels, all_preds, target_names=class_names, digits=4))
     
