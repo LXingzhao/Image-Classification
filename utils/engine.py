@@ -1,4 +1,3 @@
-# utils/engine.py
 import torch
 from tqdm import tqdm
 
@@ -22,9 +21,13 @@ def forward_step(model, images):
     """
     通用前向传播包装器：
     优先尝试 HuggingFace 的 pixel_values 传参，若失败则回退到标准 PyTorch 传参
+    支持 DDP / DataParallel 包装后的模型检查
     """
+    # 检查原始模型或 DDP/DP 包装后的内部模型是否有 config
+    unwrap_model = getattr(model, "module", model)
+    
     try:
-        if hasattr(model, "config"):
+        if hasattr(unwrap_model, "config"):
             output = model(pixel_values=images)
         else:
             output = model(images)
@@ -35,45 +38,79 @@ def forward_step(model, images):
     return extract_logits(output)
 
 
-def train_one_epoch(model, dataloader, criterion, optimizer, device):
+def train_one_epoch(model, dataloader, criterion, optimizer, device, scaler=None):
+    """
+    支持 AMP 混合精度训练的一轮训练函数
+    """
     model.train()
     total_loss, corrects = 0.0, 0
     total_samples = len(dataloader.dataset)
     
-    for images, labels in tqdm(dataloader, desc="Training"):
-        images, labels = images.to(device), labels.to(device)
+    pbar = tqdm(dataloader, desc="Training", leave=False)
+    for images, labels in pbar:
+        images, labels = images.to(device, non_blocking=True), labels.to(device, non_blocking=True)
         
         optimizer.zero_grad()
         
-        # 获取通用 logits
-        logits = forward_step(model, images)
+        # 混合精度前向传播 (AMP)
+        if scaler is not None and device.type == "cuda":
+            with torch.cuda.amp.autocast():
+                logits = forward_step(model, images)
+                loss = criterion(logits, labels)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            logits = forward_step(model, images)
+            loss = criterion(logits, labels)
+            loss.backward()
+            optimizer.step()
         
-        loss = criterion(logits, labels)
-        loss.backward()
-        optimizer.step()
-        
-        total_loss += loss.item() * images.size(0)
+        # 统计指标
+        batch_size = images.size(0)
+        total_loss += loss.item() * batch_size
         preds = logits.argmax(-1)
-        corrects += torch.sum(preds == labels.data)
+        correct_count = (preds == labels).sum().item()
+        corrects += correct_count
         
-    return total_loss / total_samples, corrects.double() / total_samples
+        # 动态更新 tqdm 实时指标
+        pbar.set_postfix({
+            'loss': f"{loss.item():.4f}",
+            'acc': f"{correct_count / batch_size:.4f}"
+        })
+        
+    epoch_loss = total_loss / total_samples
+    epoch_acc = corrects / total_samples
+    return epoch_loss, epoch_acc
 
 
 def evaluate(model, dataloader, criterion, device):
+    """
+    评估函数
+    """
     model.eval()
     total_loss, corrects = 0.0, 0
     total_samples = len(dataloader.dataset)
     
+    pbar = tqdm(dataloader, desc="Validation", leave=False)
     with torch.no_grad():
-        for images, labels in tqdm(dataloader, desc="Validation"):
-            images, labels = images.to(device), labels.to(device)
+        for images, labels in pbar:
+            images, labels = images.to(device, non_blocking=True), labels.to(device, non_blocking=True)
             
-            # 获取通用 logits
-            logits = forward_step(model, images)
+            # 如果支持硬件，验证阶段也可以开启 autocast 提速
+            if device.type == "cuda":
+                with torch.cuda.amp.autocast():
+                    logits = forward_step(model, images)
+                    loss = criterion(logits, labels)
+            else:
+                logits = forward_step(model, images)
+                loss = criterion(logits, labels)
             
-            loss = criterion(logits, labels)
-            total_loss += loss.item() * images.size(0)
+            batch_size = images.size(0)
+            total_loss += loss.item() * batch_size
             preds = logits.argmax(-1)
-            corrects += torch.sum(preds == labels.data)
+            corrects += (preds == labels).sum().item()
             
-    return total_loss / total_samples, corrects.double() / total_samples
+    epoch_loss = total_loss / total_samples
+    epoch_acc = corrects / total_samples
+    return epoch_loss, epoch_acc
