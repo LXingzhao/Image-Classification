@@ -1,4 +1,5 @@
 import os
+import argparse
 import datetime
 import yaml
 import torch
@@ -11,28 +12,29 @@ from models.builder import build_model_and_processor
 from utils.engine import train_one_epoch, evaluate
 
 def main():
-    # 1. 加载配置文件
+    # 1. 支持命令行传参切换模型配置（默认 ResNet50，也可指定 ViT）
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default="configs/cnn/resnet50.yaml", 
+                        help="模型配置文件路径，如 configs/vit/vit_base.yaml")
+    args = parser.parse_args()
+
+    # 2. 加载配置文件
     with open("configs/base_config.yaml", "r", encoding="utf-8") as f:
         base_cfg = yaml.safe_load(f)
-
-    # with open("configs/vit/vit_base.yaml", "r", encoding="utf-8") as f:     # 1、ViT-Base  配置文件
-    #     model_cfg = yaml.safe_load(f)
-
-    with open("configs/cnn/resnet50.yaml", "r", encoding="utf-8") as f:       # 2、ResNet50  配置文件
+    with open(args.config, "r", encoding="utf-8") as f:
         model_cfg = yaml.safe_load(f)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"正在使用设备: {device}")
+    print(f"正在使用设备: {device} | 加载模型配置: {args.config}")
 
-    # 2. 准备输出路径 outputs/2026-08-04/vit_base_exp1/
+    # 3. 准备输出路径 outputs/YYYY-MM-DD/model_type_exp1/
     today_date = datetime.datetime.now().strftime("%Y-%m-%d")
     exp_name = f"{model_cfg['model']['type']}_base_exp1"
     save_dir = os.path.join("outputs", today_date, exp_name)
     ckpt_dir = os.path.join(save_dir, "checkpoints")
     os.makedirs(ckpt_dir, exist_ok=True)
 
-    # 3. 初始化模型与处理器
-    # 先预置 processor 临时读取 Dataset class 结构
+    # 4. 初始化模型与处理器
     _, processor = build_model_and_processor(model_cfg['model']['name'], num_classes=2, class_names=[])
     full_dataset = CambridgeBridgeDataset(base_cfg['data']['dir'], processor)
     
@@ -43,7 +45,7 @@ def main():
     model, processor = build_model_and_processor(model_cfg['model']['name'], num_classes, class_names)
     model.to(device)
 
-    # 4. 划分数据集
+    # 5. 划分数据集
     total_size = len(full_dataset)
     train_size = int(base_cfg['data']['train_split'] * total_size)
     val_size = int(base_cfg['data']['val_split'] * total_size)
@@ -57,13 +59,20 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=base_cfg['train']['batch_size'], shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=base_cfg['train']['batch_size'], shuffle=False)
 
-    # 5. 优化器与损失函数
-    optimizer = AdamW(model.parameters(), lr=float(base_cfg['train']['lr']), weight_decay=base_cfg['train']['weight_decay'])
+    # 6. 智能设置优化器学习率 (针对 CNN 差异化放大学习率)
+    base_lr = float(base_cfg['train']['lr'])
+    if "resnet" in model_cfg['model']['name'].lower() or "cnn" in model_cfg['model']['type'].lower():
+        # 给 ResNet 的分类头更高的学习率，防止分类器训练不充分导致预测崩塌
+        lr = base_lr * 5  # 设置为 1e-4
+    else:
+        lr = base_lr
+
+    optimizer = AdamW(model.parameters(), lr=lr, weight_decay=base_cfg['train']['weight_decay'])
     criterion = nn.CrossEntropyLoss()
 
     best_val_acc = 0.0
 
-    # 6. 循环训练
+    # 7. 循环训练
     for epoch in range(base_cfg['train']['epochs']):
         print(f"\n======== Epoch {epoch + 1}/{base_cfg['train']['epochs']} ========")
         train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device)
@@ -72,15 +81,19 @@ def main():
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
         print(f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
 
-        # 保存最佳模型权重到 outputs/ 目录下
+        # 保存最佳模型权重
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             best_model_path = os.path.join(ckpt_dir, "best.pth")
             torch.save(model.state_dict(), best_model_path)
+            
+            # --- 修复 Bug 处：安全保存 HuggingFace 格式文件 ---
             if hasattr(model, 'save_pretrained'):
                 model.save_pretrained(ckpt_dir)
+            if hasattr(processor, 'save_pretrained'):
                 processor.save_pretrained(ckpt_dir)
-            print(f"-> 已保存当前最佳模型到 {ckpt_dir}")
+                
+            print(f"-> 已保存当前最佳模型到 {ckpt_dir} (Best Val Acc: {best_val_acc:.4f})")
 
 if __name__ == "__main__":
     main()
