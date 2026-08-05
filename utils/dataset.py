@@ -1,5 +1,6 @@
-# data/dataset.py
+# utils/dataset.py
 import os
+import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
@@ -26,13 +27,26 @@ class CambridgeBridgeDataset(Dataset):
         img_path, label = self.samples[idx]
         try:
             image = Image.open(img_path).convert("RGB")
-            # 兼容 ViTImageProcessor 和 torchvision transform
-            processed = self.processor(images=image, return_tensors="pt")
-            if isinstance(processed, dict):
-                pixel_values = processed['pixel_values'].squeeze(0)
+            
+            # 执行预处理 (兼容 HuggingFace Processor 与 torchvision transforms)
+            processed = self.processor(images=image, return_tensors="pt") if callable(self.processor) else self.processor(image)
+            
+            # --- 兼容性解析逻辑 ---
+            # 情况 1: HuggingFace 返回 BatchFeature 或 dict (如 ViT, Swin)
+            if hasattr(processed, "pixel_values"):
+                pixel_values = processed.pixel_values
+            elif isinstance(processed, dict) and "pixel_values" in processed:
+                pixel_values = processed["pixel_values"]
+            # 情况 2: torchvision/timm 返回 torch.Tensor (如 ResNet50, ConvNeXt)
             else:
                 pixel_values = processed
+
+            # 确保 Tensor 形状为 (C, H, W)，去除多余的 (1, C, H, W) 维度
+            if isinstance(pixel_values, torch.Tensor) and pixel_values.dim() == 4:
+                pixel_values = pixel_values.squeeze(0)
+
             return pixel_values, label
+
         except Exception as e:
             print(f"警告: 无法加载图片 {img_path}, 错误: {e}")
             raise e
