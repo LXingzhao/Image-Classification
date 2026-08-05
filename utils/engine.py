@@ -54,7 +54,7 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, scaler=None
         
         # 混合精度前向传播 (AMP)
         if scaler is not None and device.type == "cuda":
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast(device_type="cuda"):
                 logits = forward_step(model, images)
                 loss = criterion(logits, labels)
             scaler.scale(loss).backward()
@@ -99,7 +99,7 @@ def evaluate(model, dataloader, criterion, device):
             
             # 如果支持硬件，验证阶段也可以开启 autocast 提速
             if device.type == "cuda":
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast(device_type="cuda"):
                     logits = forward_step(model, images)
                     loss = criterion(logits, labels)
             else:
