@@ -97,8 +97,8 @@ def main():
             all_preds.extend(preds)
             all_labels.extend(labels.tolist())
 
-    # 6. 打印并输出科研论文标准评估报告
-    print("\n" + "="*20 + " 最终论文评估结果 " + "="*20)
+    # 6. 打印并输出标准评估报告
+    print("\n" + "="*20 + " 最终评估结果 " + "="*20)
     print(classification_report(all_labels, all_preds, target_names=class_names, digits=4))
     
     acc = accuracy_score(all_labels, all_preds)
