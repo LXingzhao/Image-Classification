@@ -1,4 +1,4 @@
-# train.py
+#train.py
 import os
 import argparse
 import datetime
@@ -13,9 +13,9 @@ from models.builder import build_model_and_processor
 from utils.engine import train_one_epoch, evaluate
 
 def main():
-    # 1. 支持命令行传参切换模型配置（默认 ResNet50，也可指定 ViT）
+    # 1. 支持命令行传参切换模型配置
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="configs/cnn/resnet50.yaml", 
+    parser.add_argument("--config", type=str, default="configs/vit/vit_base.yaml", 
                         help="模型配置文件路径，如 configs/vit/vit_base.yaml")
     args = parser.parse_args()
 
@@ -60,13 +60,19 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=base_cfg['train']['batch_size'], shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=base_cfg['train']['batch_size'], shuffle=False)
 
-    # 6. 智能设置优化器学习率 (针对 CNN 差异化放大学习率)
+    # 6. 智能设置优化器学习率
     base_lr = float(base_cfg['train']['lr'])
-    if "resnet" in model_cfg['model']['name'].lower() or "cnn" in model_cfg['model']['type'].lower():
-        # 给 ResNet 的分类头更高的学习率，防止分类器训练不充分导致预测崩塌
-        lr = base_lr * 5  # 设置为 1e-4
+    model_name_lower = model_cfg['model']['name'].lower()
+    
+    if "clip" in model_name_lower:
+        # CLIP Large 模型参数量较大，推荐采用极低学习率防止破坏预训练特征
+        lr = 1e-5
+    elif "resnet" in model_name_lower or "cnn" in model_cfg['model']['type'].lower():
+        lr = base_lr * 5  # CNN 给较高的学习率
     else:
         lr = base_lr
+
+    print(f"当前模型学习率 (Learning Rate) 设置为: {lr}")
 
     optimizer = AdamW(model.parameters(), lr=lr, weight_decay=base_cfg['train']['weight_decay'])
     criterion = nn.CrossEntropyLoss()
@@ -86,9 +92,11 @@ def main():
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             best_model_path = os.path.join(ckpt_dir, "best.pth")
+            
+            # 1. 统一保存标准的 PyTorch state_dict (.pth)
             torch.save(model.state_dict(), best_model_path)
             
-            # --- 修复 Bug 处：安全保存 HuggingFace 格式文件 ---
+            # 2. 安全保存 HuggingFace / Processor 格式文件
             if hasattr(model, 'save_pretrained'):
                 model.save_pretrained(ckpt_dir)
             if hasattr(processor, 'save_pretrained'):
