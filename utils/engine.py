@@ -46,7 +46,7 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, scaler=None
     total_loss, corrects = 0.0, 0
     total_samples = len(dataloader.dataset)
     
-    pbar = tqdm(dataloader, desc="Training", leave=False)
+    pbar = tqdm(dataloader, desc="Training")
     for images, labels in pbar:
         images, labels = images.to(device, non_blocking=True), labels.to(device, non_blocking=True)
         
@@ -92,7 +92,7 @@ def evaluate(model, dataloader, criterion, device):
     total_loss, corrects = 0.0, 0
     total_samples = len(dataloader.dataset)
     
-    pbar = tqdm(dataloader, desc="Validation", leave=False)
+    pbar = tqdm(dataloader, desc="Validation")
     with torch.no_grad():
         for images, labels in pbar:
             images, labels = images.to(device, non_blocking=True), labels.to(device, non_blocking=True)
