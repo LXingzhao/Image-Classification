@@ -1,0 +1,4 @@
+#configs/dinov3_base.yaml
+model:
+  name: "facebook/dinov3-base"
+  type: "dinov3_base"

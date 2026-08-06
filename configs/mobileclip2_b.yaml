@@ -1,0 +1,4 @@
+#configs/mobileclip2_b.yaml
+model:
+  name: "apple/mobileclip_bl_lt"
+  type: "mobileclip2_b"

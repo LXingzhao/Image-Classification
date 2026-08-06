@@ -1,0 +1,4 @@
+#configs/internimage_base.yaml
+model:
+  name: "internimage_base_224"
+  type: "internimage_base"

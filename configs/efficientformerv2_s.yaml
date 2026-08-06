@@ -1,0 +1,4 @@
+#configs/efficientformerv2_s.yaml
+model:
+  name: "snap-research/EfficientFormerV2-S0"
+  type: "efficientformerv2_s"

@@ -1,0 +1,4 @@
+#configs/sam2_hiera_base.yaml
+model:
+  name: "facebook/sam2-hiera-base-plus"
+  type: "sam2_hiera_base"

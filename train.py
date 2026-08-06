@@ -15,8 +15,8 @@ from utils.engine import train_one_epoch, evaluate
 def main():
     # 1. 支持命令行传参切换模型配置
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="configs/vit/vit_base.yaml", 
-                        help="模型配置文件路径，如 configs/vit/vit_base.yaml")
+    parser.add_argument("--config", type=str, default="configs/resnet50.yaml", 
+                        help="模型配置文件路径")
     args = parser.parse_args()
 
     # 2. 加载配置文件
@@ -28,7 +28,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"正在使用设备: {device} | 加载模型配置: {args.config}")
 
-    # 3. 准备输出路径 outputs/YYYY-MM-DD/model_type_exp1/
+    # 3. 准备输出路径
     today_date = datetime.datetime.now().strftime("%Y-%m-%d")
     exp_name = f"{model_cfg['model']['type']}_base_exp1"
     save_dir = os.path.join("outputs", today_date, exp_name)
@@ -60,15 +60,16 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=base_cfg['train']['batch_size'], shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=base_cfg['train']['batch_size'], shuffle=False)
 
-    # 6. 智能设置优化器学习率
+    # 6. 全模型通用学习率自适应匹配
     base_lr = float(base_cfg['train']['lr'])
     model_name_lower = model_cfg['model']['name'].lower()
     
-    if "clip" in model_name_lower:
-        # CLIP Large 模型参数量较大，推荐采用极低学习率防止破坏预训练特征
+    if any(k in model_name_lower for k in ["clip", "dino", "eva02", "large", "sam2"]):
+        # 大参数量预训练模型或特征提取器，采用极低学习率保护特征
         lr = 1e-5
-    elif "resnet" in model_name_lower or "cnn" in model_cfg['model']['type'].lower():
-        lr = base_lr * 5  # CNN 给较高的学习率
+    elif any(k in model_name_lower for k in ["resnet", "convnext", "mobilenet"]):
+        # 卷积为主的模型，采用相对较高的学习率
+        lr = base_lr * 2
     else:
         lr = base_lr
 
@@ -93,10 +94,9 @@ def main():
             best_val_acc = val_acc
             best_model_path = os.path.join(ckpt_dir, "best.pth")
             
-            # 1. 统一保存标准的 PyTorch state_dict (.pth)
+            # 统一保存标准的 PyTorch state_dict (.pth)
             torch.save(model.state_dict(), best_model_path)
             
-            # 2. 安全保存 HuggingFace / Processor 格式文件
             if hasattr(model, 'save_pretrained'):
                 model.save_pretrained(ckpt_dir)
             if hasattr(processor, 'save_pretrained'):

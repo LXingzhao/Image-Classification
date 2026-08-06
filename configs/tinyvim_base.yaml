@@ -1,0 +1,4 @@
+#configs/tinyvim_base.yaml
+model:
+  name: "tinyvim_base"
+  type: "tinyvim_base"

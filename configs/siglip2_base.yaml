@@ -1,0 +1,4 @@
+#configs/siglip2_base.yaml
+model:
+  name: "google/siglip-base-patch16-224"
+  type: "siglip2_base"

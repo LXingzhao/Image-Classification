@@ -1,0 +1,4 @@
+#configs/starnet.yaml
+model:
+  name: "starnet_s1"
+  type: "starnet"

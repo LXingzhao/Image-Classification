@@ -1,0 +1,4 @@
+#configs/mobilevitv3_small.yaml
+model:
+  name: "mobilevitv3_small"
+  type: "mobilevitv3_small"
