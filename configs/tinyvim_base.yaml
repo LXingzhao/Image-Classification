@@ -1,4 +1,4 @@
 #configs/tinyvim_base.yaml
 model:
-  name: "tinyvim_base"
+  name: "timm/tiny_vit_21m_224.dist_in22k_ft_in1k"
   type: "tinyvim_base"

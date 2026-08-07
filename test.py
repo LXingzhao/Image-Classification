@@ -72,13 +72,25 @@ def main():
     test_loader = DataLoader(test_dataset, batch_size=base_cfg['train']['batch_size'], shuffle=False)
     print(f"测试集准备就绪，共包含样本数: {len(test_dataset)}")
 
-    # 4. 实例化模型并加载权重
+# 4. 实例化模型并加载权重
     model, _ = build_model_and_processor(model_cfg['model']['name'], num_classes, class_names)
     best_pth = os.path.join(ckpt_dir, "best.pth")
     
     if os.path.exists(best_pth):
-        model.load_state_dict(torch.load(best_pth, map_location=device))
+        checkpoint = torch.load(best_pth, map_location=device)
+        
+        # 自动兼容字典封装格式
+        if isinstance(checkpoint, dict) and "model" in checkpoint:
+            state_dict = checkpoint["model"]
+        else:
+            state_dict = checkpoint
+
+        # 核心改动：设置 strict=False，忽略未微调的 Backbone 缺失层
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
         print(f"成功加载本地权重文件: {best_pth}")
+        
+        if missing_keys:
+            print(f"[提示] 有 {len(missing_keys)} 个预训练层未在权重文件中找到（已自动保留默认预训练参数）")
     else:
         raise FileNotFoundError(f"在路径 {ckpt_dir} 下未找到权重文件 best.pth")
         

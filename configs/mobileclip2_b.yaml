@@ -1,4 +1,4 @@
 #configs/mobileclip2_b.yaml
 model:
-  name: "apple/mobileclip_bl_lt"
+  name: "apple/mobileclip_b_timm"
   type: "mobileclip2_b"

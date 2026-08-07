@@ -1,4 +1,4 @@
 #configs/mobilevitv3_small.yaml
 model:
-  name: "mobilevitv3_small"
+  name: "apple/mobilevit-small"
   type: "mobilevitv3_small"

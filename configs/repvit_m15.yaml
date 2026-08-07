@@ -1,4 +1,4 @@
 #configs/repvit_m15.yaml
 model:
-  name: "repvit_m1_5.dist_in1k"
+  name: "repvit_m1_5.dist_450e_in1k"
   type: "repvit_m15"

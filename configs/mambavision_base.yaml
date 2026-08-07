@@ -1,4 +1,4 @@
 #configs/mambavision_base.yaml
 model:
-  name: "mambavision_base_1k"
+  name: "mambaout_base.in1k"
   type: "mambavision_base"

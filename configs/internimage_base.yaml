@@ -1,4 +1,3 @@
-#configs/internimage_base.yaml
 model:
-  name: "internimage_base_224"
+  name: "OpenGVLab/internimage_b_1k_224"  
   type: "internimage_base"
