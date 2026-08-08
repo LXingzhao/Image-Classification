@@ -13,12 +13,14 @@ from transformers import (
     AutoConfig
 )
 
-# 修复新版 transformers 与 OpenGVLab 远程代码的兼容性 bug
+# 彻底兼容新版 transformers 与 OpenGVLab/ViT 远程/原生代码的 tied_weights 属性读写
 if not hasattr(PreTrainedModel, "all_tied_weights_keys"):
-    PreTrainedModel.all_tied_weights_keys = property(
-        lambda self: getattr(self, "_tied_weights_keys", None) or {}
-    )
+    def _get_tied_keys(self):
+        return getattr(self, "_tied_weights_keys", None) or {}
+    def _set_tied_keys(self, value):
+        self._tied_weights_keys = value
 
+    PreTrainedModel.all_tied_weights_keys = property(_get_tied_keys, _set_tied_keys)
 
 class FeatureExtractorForClassification(nn.Module):
     """
@@ -29,49 +31,77 @@ class FeatureExtractorForClassification(nn.Module):
         super().__init__()
         self.num_classes = num_classes
         self.is_custom_classifier = False  # 标记是否需要自建分类头
+        model_name_lower = model_name.lower()
         
-        # 1. 优先尝试 AutoModelForImageClassification 加载 (兼容 InternImage / ViT / ResNet 等)
-        try:
-            full_model = AutoModelForImageClassification.from_pretrained(
-                model_name,
-                num_labels=num_classes,
-                ignore_mismatched_sizes=True,
-                trust_remote_code=True
-            )
-            self.backbone = full_model
-            self.is_custom_classifier = False
-            
-        except Exception:
-            # 2. 如果失败，退回使用标准 AutoModel (适用于 CLIP, DINOv2, SAM2 等双塔或无分类头模型)
+        # 1. 针对 SAM2 系列进行精准匹配（解决 SAM2 加载报错与特征提取问题）
+        if "sam2" in model_name_lower:
             try:
+                # 优先尝试从 transformers 导入专业的 Sam2VisionModel
+                from transformers import Sam2VisionModel
+                self.backbone = Sam2VisionModel.from_pretrained(model_name, trust_remote_code=True)
+            except Exception:
+                # 兜底：如果 transformers 版本较低，使用 AutoModel 提取其中的 image_encoder
                 full_model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
-                if hasattr(full_model, "vision_model"):
+                if hasattr(full_model, "image_encoder"):
+                    self.backbone = full_model.image_encoder
+                elif hasattr(full_model, "vision_model"):
                     self.backbone = full_model.vision_model
                 else:
                     self.backbone = full_model
-                self.is_custom_classifier = True
+            self.is_custom_classifier = True
 
-            except ValueError:
-                # 3. Depth Anything 等深度估计模型，提取内部特征 backbone
+        else:
+            # 2. 其他无分类头模型：首先判断是否已知是没有原生 Classification Head 的模型
+            # 跳过 AutoModelForImageClassification 以避免产生控制台冗余报警日志
+            known_non_classification_models = ["clip", "dino", "siglip", "depth-anything", "mobileclip"]
+            should_skip_for_class = any(k in model_name_lower for k in known_non_classification_models)
+
+            loaded = False
+            if not should_skip_for_class:
                 try:
-                    depth_model = AutoModelForDepthEstimation.from_pretrained(model_name, trust_remote_code=True)
-                    if hasattr(depth_model, "backbone"):
-                        self.backbone = depth_model.backbone
+                    full_model = AutoModelForImageClassification.from_pretrained(
+                        model_name,
+                        num_labels=num_classes,
+                        ignore_mismatched_sizes=True,
+                        trust_remote_code=True
+                    )
+                    self.backbone = full_model
+                    self.is_custom_classifier = False
+                    loaded = True
+                except Exception:
+                    loaded = False
+
+            if not loaded:
+                # 3. 退回使用标准 AutoModel (适用于 CLIP, DINOv2 等双塔模型)
+                try:
+                    full_model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
+                    if hasattr(full_model, "vision_model"):
+                        self.backbone = full_model.vision_model
                     else:
-                        self.backbone = depth_model
+                        self.backbone = full_model
                     self.is_custom_classifier = True
 
-                except Exception:
-                    # 4. 尝试通过 timm 库进行兜底加载
+                except ValueError:
+                    # 4. Depth Anything 等深度估计模型，提取内部特征 backbone
                     try:
-                        self.backbone = timm.create_model(model_name, pretrained=True, num_classes=num_classes)
-                        self.is_custom_classifier = False
-                    except Exception:
-                        config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
-                        self.backbone = AutoModel.from_config(config, trust_remote_code=True)
+                        depth_model = AutoModelForDepthEstimation.from_pretrained(model_name, trust_remote_code=True)
+                        if hasattr(depth_model, "backbone"):
+                            self.backbone = depth_model.backbone
+                        else:
+                            self.backbone = depth_model
                         self.is_custom_classifier = True
 
-        # 如果使用的不是 AutoModelForImageClassification 或 timm，需要手动构建Linear分类头
+                    except Exception:
+                        # 5. 尝试通过 timm 库进行兜底加载
+                        try:
+                            self.backbone = timm.create_model(model_name, pretrained=True, num_classes=num_classes)
+                            self.is_custom_classifier = False
+                        except Exception:
+                            config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+                            self.backbone = AutoModel.from_config(config, trust_remote_code=True)
+                            self.is_custom_classifier = True
+
+        # 如果使用的不是 AutoModelForImageClassification 或 timm，手动构建 Linear 分类头
         if self.is_custom_classifier:
             embed_dim = self._get_embed_dim()
             self.classifier = nn.Linear(embed_dim, num_classes)
@@ -80,10 +110,23 @@ class FeatureExtractorForClassification(nn.Module):
         """自动推断 backbone 的特征输出维度"""
         if hasattr(self.backbone, "config"):
             cfg = self.backbone.config
+            # 优先精准识别 SAM2 的特征通道（Sam2VisionModel 的最后一层通道大小为 hidden_dim 或 output_channels[-1]）
+            if hasattr(cfg, "output_channels") and isinstance(cfg.output_channels, (list, tuple)):
+                return cfg.output_channels[-1]
+            if hasattr(cfg, "vision_config"):
+                vc = cfg.vision_config
+                if hasattr(vc, "output_channels") and isinstance(vc.output_channels, (list, tuple)):
+                    return vc.output_channels[-1]
+                if hasattr(vc, "hidden_size"):
+                    return vc.hidden_size
+            if hasattr(cfg, "hidden_dim"):
+                return cfg.hidden_dim
+            # 兼容 Depth Anything / DINOv2 等 backbone 的 hidden_sizes 列表配置
+            if hasattr(cfg, "hidden_sizes") and isinstance(cfg.hidden_sizes, (list, tuple)):
+                return cfg.hidden_sizes[-1]
             for attr in ["hidden_size", "d_model", "embed_dim", "projection_dim", "num_features"]:
                 if hasattr(cfg, attr):
                     return getattr(cfg, attr)
-        # 如果从 config 拿不到，给出一个常用默认值
         return getattr(self.backbone, "num_features", 768)
 
     def forward(self, x):
@@ -94,18 +137,60 @@ class FeatureExtractorForClassification(nn.Module):
         else:
             # 提取特征后送入自建的 classifier
             outputs = self.backbone(x)
+            
+            # --- 多层级/多结构特征提取兼容 ---
+            feat = None
             if hasattr(outputs, "last_hidden_state"):
                 feat = outputs.last_hidden_state
-                if feat.dim() == 4:
-                    feat = feat.mean(dim=[-2, -1])  # GAP 全局池化
-                elif feat.dim() == 3:
-                    feat = feat[:, 0, :]           # 取 [CLS] token
+            elif hasattr(outputs, "feature_maps") and outputs.feature_maps:
+                feat = outputs.feature_maps[-1]
+            elif hasattr(outputs, "hidden_states") and outputs.hidden_states:
+                feat = outputs.hidden_states[-1]
             elif hasattr(outputs, "pooler_output") and outputs.pooler_output is not None:
                 feat = outputs.pooler_output
+            elif isinstance(outputs, (tuple, list)):
+                feat = outputs[-1]
             else:
                 feat = outputs
-                if feat.dim() == 4:
+
+            # 特殊情况处理：如果返回的是 dict 结构（如部分 SAM2 / 离散 Backbone）
+            if isinstance(feat, dict):
+                if "last_hidden_state" in feat:
+                    feat = feat["last_hidden_state"]
+                elif "vision_features" in feat:
+                    feat = feat["vision_features"]
+                else:
+                    feat = list(feat.values())[-1]
+
+            # --- 动态感知池化：彻底解决维度不匹配问题 ---
+            if isinstance(feat, torch.Tensor):
+                target_dim = self.classifier.in_features
+                
+                # 如果当前 Tensor 的最后一个维度正好与 classifier 要求的一致
+                if feat.shape[-1] == target_dim:
+                    if feat.dim() == 4:     # 例如 [B, H, W, C]
+                        feat = feat.mean(dim=[1, 2])
+                    elif feat.dim() == 3:   # 例如 [B, N, C]
+                        feat = feat.mean(dim=1)
+                # 如果当前 Tensor 的第2维 (C维度) 与 classifier 一致
+                elif feat.dim() == 4 and feat.shape[1] == target_dim: # 例如 [B, C, H, W]
                     feat = feat.mean(dim=[-2, -1])
+                else:
+                    # 兜底适配：将除 Batch 以外的所有维度展平，如仍不匹配通过 Adaptive Avg Pooling 强行归一到 target_dim
+                    if feat.dim() > 2:
+                        # 查找哪个轴对应 target_dim
+                        match_dims = [i for i, size in enumerate(feat.shape) if size == target_dim]
+                        if match_dims:
+                            # 保留 Batch 和匹配到的特征维度，对其他所有空间维度求均值
+                            keep_dim = match_dims[0]
+                            reduce_dims = [i for i in range(1, feat.dim()) if i != keep_dim]
+                            feat = feat.mean(dim=reduce_dims)
+                        else:
+                            # 极罕见边界情况：展平后自适应池化
+                            feat = feat.flatten(start_dim=1)
+                            if feat.shape[-1] != target_dim:
+                                feat = nn.functional.adaptive_avg_pool1d(feat.unsqueeze(1), target_dim).squeeze(1)
+
             return self.classifier(feat)
 
 
@@ -169,8 +254,8 @@ def build_model_and_processor(model_name: str, num_classes: int, class_names: li
         model = YOLOClassificationWrapper(base_model)
         return model, fallback_processor
 
-# 2. HuggingFace 特征提取类模型
-    feature_models = ["clip", "dino", "siglip", "depth-anything", "sam2", "mobileclip", "tinyvim", "internimage"]
+    # 2. HuggingFace 特征提取类模型
+    feature_models = ["clip", "dino", "siglip", "depth-anything", "sam2", "mobileclip", "tinyvim", "internimage", "vit_base"]
     if any(k in model_name_lower for k in feature_models):
         try:
             # 针对 sam2 和 depth-anything 等高分辨率模型，强制覆盖输入分辨率为 224x224

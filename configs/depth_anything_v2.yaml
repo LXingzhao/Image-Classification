@@ -2,6 +2,3 @@
 model:
   name: "depth-anything/Depth-Anything-V2-Base-hf"
   type: "depth_anything_v2"
-
-train:
-  batch_size: 4  # 显存较小时设为 4 或 2（base_config 默认的 16 对于 Depth Anything 太大了）
