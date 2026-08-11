@@ -3,63 +3,72 @@ import os
 import re
 import argparse
 import pandas as pd
+from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
+
+# 类别中英文映射字典
+CLASS_TRANSLATION = {
+    "Healthy": "健康",
+    "Potentially unhealthy": "潜在不健康",
+    "Unhealthy": "不健康"
+}
 
 def parse_log_file(log_path):
-    """解析单个 log.txt 文件并提取字段"""
+    """解析单个 log.txt 文件并提取数据项"""
     with open(log_path, 'r', encoding='utf-8') as f:
         content = f.read()
 
     data = {}
     
-    # 0. 提取路径中的实验元信息
-    # 路径示例: outputs/CambridgeBridge/2026-08-11/vit_exp1/CambridgeBridge_vit_base_log.txt
+    # 0. 实验元信息（仅保留日期，去除实验名称）
     normalized_path = log_path.replace('\\', '/')
     path_parts = normalized_path.split('/')
     if len(path_parts) >= 4:
-        data["实验日期"] = path_parts[-3]
-        data["实验名称"] = path_parts[-2]
+        data["日期\nDate"] = path_parts[-3]
 
     # 1. 提取配置与超参数
-    data["数据集"] = re.search(r"数据集 \(Dataset Name\):\s*([^\n]+)", content).group(1).strip() if re.search(r"数据集 \(Dataset Name\):\s*([^\n]+)", content) else ""
-    data["模型权重/名称"] = re.search(r"模型名称 \(Model\):\s*([^\n]+)", content).group(1).strip() if re.search(r"模型名称 \(Model\):\s*([^\n]+)", content) else ""
-    
-    batch_size = re.search(r"批次大小 \(Batch Size\):\s*(\d+)", content)
-    data["Batch Size"] = int(batch_size.group(1)) if batch_size else None
-    
-    lr = re.search(r"学习率 \(Learning Rate\):\s*([^\n]+)", content)
-    data["Learning Rate"] = float(lr.group(1)) if lr else None
-    
-    weight_decay = re.search(r"权重衰减 \(Weight Decay\):\s*([^\n]+)", content)
-    data["Weight Decay"] = float(weight_decay.group(1)) if weight_decay else None
+    dataset_m = re.search(r"数据集 \(Dataset Name\):\s*([^\n]+)", content)
+    data["数据集\nDataset"] = dataset_m.group(1).strip() if dataset_m else ""
 
-    # 2. 提取训练总结
+    model_type_m = re.search(r"模型名称 \(Model Type\):\s*([^\n]+)", content) or re.search(r"模型名称 \(Model\):\s*([^\n]+)", content)
+    data["模型名称\nModel"] = model_type_m.group(1).strip() if model_type_m else ""
+
+    model_id_m = re.search(r"模型ID \(Model ID\)\s*:\s*([^\n]+)", content)
+    data["模型ID\nModel ID"] = model_id_m.group(1).strip() if model_id_m else ""
+
+    lr_m = re.search(r"学习率 \(Learning Rate\):\s*([^\n]+)", content)
+    data["学习率\nLR"] = float(lr_m.group(1)) if lr_m else None
+
+    bs_m = re.search(r"批次大小 \(Batch Size\):\s*(\d+)", content)
+    data["批次大小\nBatch Size"] = int(bs_m.group(1)) if bs_m else None
+
+    wd_m = re.search(r"权重衰减 \(Weight Decay\):\s*([^\n]+)", content)
+    data["权重衰减\nWeight Decay"] = float(wd_m.group(1)) if wd_m else None
+
+    # 2. 验证集最佳轮次（Val Best）及对应数据
     train_epochs = re.search(r"实际训练总轮数:\s*(\d+)/(\d+)", content)
     if train_epochs:
-        data["实际训练轮数"] = int(train_epochs.group(1))
-        data["设定最大轮数"] = int(train_epochs.group(2))
-    
+        data["训练轮数\nEpochs"] = f"{train_epochs.group(1)}/{train_epochs.group(2)}"
+
     best_epoch = re.search(r"最佳模型出现轮数:\s*Epoch\s*(\d+)", content)
-    data["最佳Epoch"] = int(best_epoch.group(1)) if best_epoch else None
-    
-    best_train_loss = re.search(r"Train Loss:\s*([\d\.]+)\s*\|\s*Train Acc:\s*([\d\.]+)", content)
-    if best_train_loss:
-        data["最佳Train Loss"] = float(best_train_loss.group(1))
-        data["最佳Train Acc"] = float(best_train_loss.group(2))
+    data["最佳轮次\nBest Epoch"] = int(best_epoch.group(1)) if best_epoch else None
 
     best_val_loss = re.search(r"Val Loss\s*:\s*([\d\.]+)\s*\|\s*Val Acc\s*:\s*([\d\.]+)", content)
     if best_val_loss:
-        data["最佳Val Loss"] = float(best_val_loss.group(1))
-        data["最佳Val Acc"] = float(best_val_loss.group(2))
+        data["验证集准确率\nVal Acc [Best]"] = float(best_val_loss.group(2))
+        data["验证集损失\nVal Loss [Best]"] = float(best_val_loss.group(1))
 
-    train_time = re.search(r"训练总耗时:\s*([\d\.]+)s", content)
-    data["训练总耗时(s)"] = float(train_time.group(1)) if train_time else None
-    
+    best_train_loss = re.search(r"Train Loss:\s*([\d\.]+)\s*\|\s*Train Acc:\s*([\d\.]+)", content)
+    if best_train_loss:
+        data["最佳轮训练准确率\nTrain Acc [Val Best]"] = float(best_train_loss.group(2))
+        data["最佳轮训练损失\nTrain Loss [Val Best]"] = float(best_train_loss.group(1))
+
+    # 单位优化
     avg_train_time = re.search(r"每轮平均耗时:\s*([\d\.]+)s", content)
-    data["单轮平均耗时(s)"] = float(avg_train_time.group(1)) if avg_train_time else None
+    data["单轮耗时\nEpoch Time (s)"] = float(avg_train_time.group(1)) if avg_train_time else None
 
-    # 3. 提取测试集评估指标
+    # 3. 测试集评估指标
     test_acc = re.search(r"测试集准确率 \(Overall Accuracy\):\s*([\d\.]+)%", content)
-    data["Test Acc (%)"] = float(test_acc.group(1)) if test_acc else None
+    data["测试集准确率\nTest Acc (%)"] = float(test_acc.group(1)) if test_acc else None
 
     test_samples = re.search(r"测试集样本数:\s*(\d+)", content)
     num_test_samples = int(test_samples.group(1)) if test_samples else None
@@ -67,35 +76,47 @@ def parse_log_file(log_path):
     test_time = re.search(r"测试集推理评估总耗时 \(Test Total Time\):\s*([\d\.]+)s", content)
     if test_time:
         total_time_s = float(test_time.group(1))
-        data["测试推理总耗时(s)"] = total_time_s
+        data["测试总耗时\nTest Time (s)"] = total_time_s
         if num_test_samples:
-            data["单样本推理延迟(ms/img)"] = round((total_time_s / num_test_samples) * 1000, 2)
+            data["推理延迟\nLatency (ms/img)"] = round((total_time_s / num_test_samples) * 1000, 2)
 
-    # 4. 解析 classification_report (全局 average 与细分类别 F1)
+    # 4. 全局 Average 指标
     macro_avg = re.search(r"macro avg\s+([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)\s+(\d+)", content)
     if macro_avg:
-        data["Macro Precision"] = float(macro_avg.group(1))
-        data["Macro Recall"] = float(macro_avg.group(2))
-        data["Macro F1"] = float(macro_avg.group(3))
+        data["宏精准度\nMacro Prec"] = float(macro_avg.group(1))
+        data["宏召回率\nMacro Rec"] = float(macro_avg.group(2))
+        data["宏F1\nMacro F1"] = float(macro_avg.group(3))
 
     weighted_avg = re.search(r"weighted avg\s+([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)\s+(\d+)", content)
     if weighted_avg:
-        data["Weighted Precision"] = float(weighted_avg.group(1))
-        data["Weighted Recall"] = float(weighted_avg.group(2))
-        data["Weighted F1"] = float(weighted_avg.group(3))
+        data["加权精准度\nWeighted Prec"] = float(weighted_avg.group(1))
+        data["加权召回率\nWeighted Rec"] = float(weighted_avg.group(2))
+        data["加权F1\nWeighted F1"] = float(weighted_avg.group(3))
 
-    # 提取各个特定类别的 F1-Score
-    class_lines = re.findall(r"^\s*([A-Za-z0-9_\-\s]+?)\s+([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)\s+(\d+)\s*$", content, re.MULTILINE)
-    for cls_name, prec, rec, f1, supp in class_lines:
-        cls_name = cls_name.strip()
-        if cls_name not in ["accuracy", "macro avg", "weighted avg"]:
-            data[f"{cls_name} (F1)"] = float(f1)
+    # 5. 精确截取评估结果块，按类别解析 F1
+    report_block_m = re.search(r"===+\s*最终评估结果\s*===+([\s\S]+?)==========================================", content)
+    if report_block_m:
+        report_block = report_block_m.group(1)
+        lines = report_block.split('\n')
+        for line in lines:
+            line_str = line.strip()
+            match = re.match(r"^([A-Za-z0-9_\-\s]+?)\s+([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)\s+(\d+)$", line_str)
+            if match:
+                cls_name = match.group(1).strip()
+                f1_val = float(match.group(4))
+                
+                if cls_name.lower() in ["accuracy", "macro avg", "weighted avg"]:
+                    continue
+                    
+                zh_name = CLASS_TRANSLATION.get(cls_name, cls_name)
+                col_label = f"{zh_name}(F1)\n{cls_name} F1"
+                data[col_label] = f1_val
 
     return data
 
 
 def main():
-    parser = argparse.ArgumentParser(description="自动汇总相同数据集下的模型评估结果至 Excel")
+    parser = argparse.ArgumentParser(description="自动汇总模型评估结果至双语美化 Excel")
     parser.add_argument("--dataset", type=str, default="CambridgeBridge", help="目标数据集名称")
     args = parser.parse_args()
 
@@ -104,7 +125,6 @@ def main():
         print(f"[错误] 数据集目录不存在: {dataset_dir}")
         return
 
-    # 递归搜索所有日志文件
     log_files = []
     for root, _, files in os.walk(dataset_dir):
         for file in files:
@@ -112,10 +132,10 @@ def main():
                 log_files.append(os.path.join(root, file))
 
     if not log_files:
-        print(f"[提示] 在 {dataset_dir} 路径下未查找到任何日志文件！")
+        print(f"[提示] 未在 {dataset_dir} 路径下查找到任何日志文件！")
         return
 
-    print(f"搜寻到 {len(log_files)} 个日志文件，正在解析汇总...")
+    print(f"找到 {len(log_files)} 个日志文件，解析汇总中...")
     
     all_data = []
     for log_path in log_files:
@@ -128,32 +148,77 @@ def main():
 
     df = pd.DataFrame(all_data)
 
-    # 优先展示的核心列排序
-    first_cols = [
-        "实验名称", "实验日期", "数据集", "模型权重/名称", "Test Acc (%)", 
-        "Macro F1", "Weighted F1", "单样本推理延迟(ms/img)", 
-        "Learning Rate", "Batch Size", "最佳Epoch", "实际训练轮数"
+    # 调整预设标准列顺序：
+    # 1. 移除【实验名称】
+    # 2. 【实验日期】改为【日期】
+    # 3. 【模型简称】改为【模型名称】
+    # 4. 【测试集准确率】保持在【最佳轮次】前面
+    preferred_order = [
+        "日期\nDate", "数据集\nDataset",
+        "模型名称\nModel", "模型ID\nModel ID", 
+        "学习率\nLR", "批次大小\nBatch Size", "权重衰减\nWeight Decay",
+        "测试集准确率\nTest Acc (%)", 
+        "最佳轮次\nBest Epoch", "训练轮数\nEpochs",
+        "验证集准确率\nVal Acc [Best]", "验证集损失\nVal Loss [Best]",
+        "最佳轮训练准确率\nTrain Acc [Val Best]", "最佳轮训练损失\nTrain Loss [Val Best]",
+        "推理延迟\nLatency (ms/img)", "测试总耗时\nTest Time (s)", "单轮耗时\nEpoch Time (s)",
+        "宏F1\nMacro F1", "加权F1\nWeighted F1",
+        "宏精准度\nMacro Prec", "宏召回率\nMacro Rec",
+        "加权精准度\nWeighted Prec", "加权召回率\nWeighted Rec"
     ]
-    
-    existing_first_cols = [c for c in first_cols if c in df.columns]
-    other_cols = [c for c in df.columns if c not in existing_first_cols]
-    df = df[existing_first_cols + other_cols]
 
-    # 导出至 Excel
+    existing_cols = [c for c in preferred_order if c in df.columns]
+    remaining_cols = [c for c in df.columns if c not in existing_cols]
+    df = df[existing_cols + remaining_cols]
+
     output_excel_path = os.path.join(dataset_dir, f"{args.dataset}_summary.xlsx")
     
-    # 使用 openpyxl 引擎自动调整列宽
+    # openpyxl 样式导出
     with pd.ExcelWriter(output_excel_path, engine='openpyxl') as writer:
-        df.to_excel(writer, sheet_name="模型汇总指标对比", index=False)
+        df.to_excel(writer, sheet_name="模型评估汇总", index=False)
         
-        # 美化表格：根据数据长度设置列宽
-        worksheet = writer.sheets["模型汇总指标对比"]
-        for col in worksheet.columns:
-            max_len = max(len(str(cell.value or '')) for cell in col)
-            col_letter = col[0].column_letter
-            worksheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
+        worksheet = writer.sheets["模型评估汇总"]
+        
+        header_fill = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
+        header_font = Font(name="Microsoft YaHei", size=10, bold=True, color="FFFFFF")
+        data_font = Font(name="Microsoft YaHei", size=9.5)
+        
+        thin_border = Border(
+            left=Side(style='thin', color='D9D9D9'),
+            right=Side(style='thin', color='D9D9D9'),
+            top=Side(style='thin', color='D9D9D9'),
+            bottom=Side(style='thin', color='D9D9D9')
+        )
+        
+        # 表头排版美化
+        worksheet.row_dimensions[1].height = 38
+        for col_idx, col in enumerate(worksheet.columns, start=1):
+            cell = worksheet.cell(row=1, column=col_idx)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            
+            lines = str(cell.value).split('\n')
+            max_header_line_len = max(len(line) for line in lines) if lines else 0
+            
+            max_data_len = 0
+            for row_idx in range(2, len(df) + 2):
+                data_cell = worksheet.cell(row=row_idx, column=col_idx)
+                data_cell.font = data_font
+                data_cell.border = thin_border
+                data_cell.alignment = Alignment(horizontal="center", vertical="center")
+                val_str = str(data_cell.value or '')
+                if len(val_str) > max_data_len:
+                    max_data_len = len(val_str)
+            
+            col_letter = cell.column_letter
+            calc_width = max(max_header_line_len + 5, max_data_len + 4, 14)
+            worksheet.column_dimensions[col_letter].width = min(calc_width, 35)
 
-    print(f"\n[导出成功] 所有模型运行数据已汇总至: {output_excel_path}")
+        for row_idx in range(2, len(df) + 2):
+            worksheet.row_dimensions[row_idx].height = 22
+
+    print(f"\n[导出成功] 表格字段已更新完成，保存至: {output_excel_path}")
 
 
 if __name__ == "__main__":

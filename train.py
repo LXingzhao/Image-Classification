@@ -141,15 +141,16 @@ def main():
 
     print(f"正在使用设备: {device}")
     print(f"加载模型配置: {args.config} | 数据集配置: {args.dataset_config}")
-    print(f"================ 超参数与数据集配置 ================")
-    print(f"数据集 (Dataset Name): {dataset_name}")
+    print("================ 超参数与数据集配置 ================")
+    print(f"数据集 (Dataset Name): {cfg['dataset']['name']}")
     print(f"数据集路径 (Data Dir): {cfg['dataset']['dir']}")
-    print(f"模型名称 (Model): {cfg['model']['name']}")
-    print(f"批次大小 (Batch Size): {batch_size}")
-    print(f"学习率 (Learning Rate): {lr}")
-    print(f"权重衰减 (Weight Decay): {weight_decay}")
+    print(f"模型名称 (Model Type): {cfg['model']['type']}")  # 简称，例如: vit_base
+    print(f"模型ID (Model ID)    : {cfg['model']['name']}")  # HuggingFace ID，例如: google/vit-base-patch16-224
+    print(f"批次大小 (Batch Size): {cfg['train']['batch_size']}")
+    print(f"学习率 (Learning Rate): {cfg['train']['lr']}")
+    print(f"权重衰减 (Weight Decay): {cfg['train']['weight_decay']}")
     print(f"输出保存路径: {save_dir}")
-    print(f"===================================================")
+    print("===================================================")
 
     # ---------------------------------------------------------
     # 4. 构建数据与模型
