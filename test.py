@@ -122,11 +122,21 @@ def main():
             f"请先运行训练命令: python train.py --model {args.model} --dataset {args.dataset}"
         )
 
-    # 重定向测试日志追加保存至同一文件夹下的 train_log.txt
+    # 重定向测试日志：自动匹配该文件夹下的 _log.txt 日志文件
     save_dir = os.path.dirname(ckpt_dir)
-    log_file_path = os.path.join(save_dir, "train_log.txt")
-    if os.path.exists(log_file_path):
+    log_file_path = None
+
+    # 寻找以 _log.txt 结尾的文件，或者默认的 train_log.txt
+    for file in os.listdir(save_dir):
+        if file.endswith("_log.txt") or file == "train_log.txt":
+            log_file_path = os.path.join(save_dir, file)
+            break
+
+    if log_file_path and os.path.exists(log_file_path):
         sys.stdout = AppendLogger(log_file_path)
+        print(f"[日志记录] 已将测试日志重定向追加至: {log_file_path}")
+    else:
+        print("[提示] 未匹配到已有训练日志文件，测试打印将仅在控制台显示。")
 
     print("\n" + "="*20 + " 开始测试集评估 " + "="*20)
     print(f"评估数据集: {dataset_name}")
