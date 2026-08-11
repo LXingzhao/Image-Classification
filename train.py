@@ -1,49 +1,165 @@
 # train.py
 import os
+import sys
+import time
 import argparse
 import datetime
+import json
 import yaml
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 from torch.optim import AdamW
+from torch.utils.tensorboard import SummaryWriter
 
-from utils.dataset import CambridgeBridgeDataset
-from models.builder import build_model_and_processor
-from utils.engine import train_one_epoch, evaluate
+def get_dataset_class(dataset_type: str):
+    dataset_type = dataset_type.lower()
+    if dataset_type == "cambridge":
+        from utils.dataset import CambridgeBridgeDataset
+        return CambridgeBridgeDataset
+    elif dataset_type in ["gyu_det", "gyu"]:
+        from utils.dataset import GYUDETDataset
+        return GYUDETDataset
+    else:
+        raise ValueError(f"未知的数据集类型: {dataset_type}")
+
+
+class Logger(object):
+    def __init__(self, filepath):
+        self.terminal = sys.stdout
+        self.log = open(filepath, "w", encoding="utf-8")
+        
+        abs_path = os.path.abspath(filepath)
+        folder_path = os.path.dirname(abs_path)
+        file_name = os.path.basename(abs_path)
+        
+        header_info = f"保存路径: {folder_path} | 文件名: {file_name}\n" + "="*60 + "\n"
+        self.terminal.write(header_info)
+        self.log.write(header_info)
+        self.log.flush()
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
+    def isatty(self):
+        return hasattr(self.terminal, "isatty") and self.terminal.isatty()
+
 
 def main():
-    # 1. 支持命令行传参切换模型配置
+    # ---------------------------------------------------------
+    # 1. 命令行参数配置（自动拼接 configs/models/ 和 configs/datasets/）
+    # ---------------------------------------------------------
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="configs/resnet50.yaml", 
-                        help="模型配置文件路径")
+    parser.add_argument("--model", type=str, default="dinov2_base", 
+                        help="模型配置文件名称 (如 dinov2_base 或 vit_base)")
+    parser.add_argument("--dataset", type=str, default="CambridgeBridge", 
+                        help="数据集配置文件名称 (如 CambridgeBridge 或 gyu_det)")
+    parser.add_argument("--config", type=str, default="", 
+                        help="手动指定模型配置文件全路径")
+    parser.add_argument("--dataset_config", type=str, default="", 
+                        help="手动指定数据集配置文件全路径")
+    parser.add_argument("--patience", type=int, default=10, 
+                        help="早停机制容忍轮数")
     args = parser.parse_args()
 
-    # 2. 加载配置文件并进行深度合并
+    #  优先补全数据集配置文件路径 (configs/datasets/CambridgeBridge.yaml)
+    if not args.dataset_config:
+        dataset_filename = args.dataset if args.dataset.endswith(".yaml") else f"{args.dataset}.yaml"
+        args.dataset_config = os.path.join("configs", "datasets", dataset_filename)
+
+    #  自动匹配数据集子目录下的模型配置文件 (configs/models/CambridgeBridge/vit_base.yaml)
+    if not args.config:
+        dataset_name_from_path = os.path.splitext(os.path.basename(args.dataset_config))[0]
+        model_filename = args.model if args.model.endswith(".yaml") else f"{args.model}.yaml"
+        
+        # 优先寻找数据集专属模型配置
+        args.config = os.path.join("configs", "models", dataset_name_from_path, model_filename)
+        
+        # 降级备选：如果专属配置不存在，则尝试读取全局通用模型配置 (configs/models/vit_base.yaml)
+        if not os.path.exists(args.config):
+            fallback_path = os.path.join("configs", "models", model_filename)
+            if os.path.exists(fallback_path):
+                args.config = fallback_path
+
+    # ---------------------------------------------------------
+    # 2. 读取并合并配置
+    # ---------------------------------------------------------
+    #  加载全局默认配置 (base)
     with open("configs/base_config.yaml", "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+    if "train" not in cfg:
+        cfg["train"] = {}
+
+    #  载入并合并数据集配置 (dataset)
+    with open(args.dataset_config, "r", encoding="utf-8") as f:
+        dataset_cfg = yaml.safe_load(f)
+        cfg["dataset"] = dataset_cfg.get("dataset", {})
+        if "train" in dataset_cfg and dataset_cfg["train"]:
+            cfg["train"].update(dataset_cfg["train"])
+
+    #  载入并合并模型/专属超参数配置 (model，优先级最高)
     with open(args.config, "r", encoding="utf-8") as f:
         model_cfg = yaml.safe_load(f)
+        cfg["model"] = model_cfg.get("model", {})
+        if "train" in model_cfg and model_cfg["train"]:
+            cfg["train"].update(model_cfg["train"])
 
-    # 如果模型专属 yaml 中覆盖了 train 配置（例如单独设置了更小的 batch_size），进行覆盖更新
-    if "train" in model_cfg:
-        cfg["train"].update(model_cfg["train"])
-    cfg["model"] = model_cfg["model"]
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"正在使用设备: {device} | 加载模型配置: {args.config}")
-    print(f"当前 Batch Size: {cfg['train']['batch_size']}")
-
-    # 3. 准备输出路径
+    # ---------------------------------------------------------
+    # 3. 构造输出路径：outputs/{dataset_name}/{YYYY-MM-DD}/{model_type}_exp1
+    # ---------------------------------------------------------
     today_date = datetime.datetime.now().strftime("%Y-%m-%d")
-    exp_name = f"{cfg['model']['type']}_base_exp1"
-    save_dir = os.path.join("outputs", today_date, exp_name)
+    dataset_name = cfg['dataset']['name']
+    
+    # 修复命名规范：防止出现 vit_base_base_exp1
+    model_type = cfg['model']['type']
+    exp_name = f"{model_type}_exp1" if not model_type.endswith("_base") else f"{model_type[:-5]}_exp1"
+    
+    # 按照数据集分类输出
+    save_dir = os.path.join("outputs", dataset_name, today_date, exp_name)
     ckpt_dir = os.path.join(save_dir, "checkpoints")
     os.makedirs(ckpt_dir, exist_ok=True)
 
-    # 4. 初始化模型与处理器
+    # 修改日志文件名：数据集_模型名称_log.txt
+    log_filename = f"{dataset_name}_{model_type}_log.txt"
+    log_file_path = os.path.join(save_dir, log_filename)
+    sys.stdout = Logger(log_file_path)
+
+    # 初始化 TensorBoard 日志记录器
+    tb_writer = SummaryWriter(log_dir=os.path.join(save_dir, "tb_logs"))
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    lr = float(cfg['train']['lr'])
+    batch_size = int(cfg['train']['batch_size'])
+    weight_decay = float(cfg['train']['weight_decay'])
+
+    print(f"正在使用设备: {device}")
+    print(f"加载模型配置: {args.config} | 数据集配置: {args.dataset_config}")
+    print(f"================ 超参数与数据集配置 ================")
+    print(f"数据集 (Dataset Name): {dataset_name}")
+    print(f"数据集路径 (Data Dir): {cfg['dataset']['dir']}")
+    print(f"模型名称 (Model): {cfg['model']['name']}")
+    print(f"批次大小 (Batch Size): {batch_size}")
+    print(f"学习率 (Learning Rate): {lr}")
+    print(f"权重衰减 (Weight Decay): {weight_decay}")
+    print(f"输出保存路径: {save_dir}")
+    print(f"===================================================")
+
+    # ---------------------------------------------------------
+    # 4. 构建数据与模型
+    # ---------------------------------------------------------
+    from models.builder import build_model_and_processor
+
     _, processor = build_model_and_processor(cfg['model']['name'], num_classes=2, class_names=[])
-    full_dataset = CambridgeBridgeDataset(cfg['data']['dir'], processor)
+    
+    DatasetClass = get_dataset_class(cfg['dataset']['type'])
+    full_dataset = DatasetClass(cfg['dataset']['dir'], processor)
     
     class_names = full_dataset.classes
     num_classes = len(class_names)
@@ -52,10 +168,12 @@ def main():
     model, processor = build_model_and_processor(cfg['model']['name'], num_classes, class_names)
     model.to(device)
 
-    # 5. 划分数据集
+    # ---------------------------------------------------------
+    # 5. 划分数据集与 DataLoader
+    # ---------------------------------------------------------
     total_size = len(full_dataset)
-    train_size = int(cfg['data']['train_split'] * total_size)
-    val_size = int(cfg['data']['val_split'] * total_size)
+    train_size = int(cfg['dataset']['train_split'] * total_size)
+    val_size = int(cfg['dataset']['val_split'] * total_size)
     test_size = total_size - train_size - val_size
 
     train_dataset, val_dataset, test_dataset = random_split(
@@ -63,78 +181,128 @@ def main():
         generator=torch.Generator().manual_seed(cfg['seed'])
     )
 
-    # 使用从配置解析出的 batch_size
-    batch_size = cfg['train']['batch_size']
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-    # 6. 全模型通用学习率自适应匹配
-    base_lr = float(cfg['train']['lr'])
-    model_name_lower = cfg['model']['name'].lower()
-    
-    if any(k in model_name_lower for k in ["clip", "dino", "depth-anything", "eva02", "large", "sam2"]):
-        # 大参数量预训练模型或特征提取器，采用极低学习率保护特征
-        lr = 1e-5
-    elif any(k in model_name_lower for k in ["resnet", "convnext", "mobilenet"]):
-        # 卷积为主的模型，采用相对较高的学习率
-        lr = base_lr * 2
-    else:
-        lr = base_lr
-
-    print(f"当前模型学习率 (Learning Rate) 设置为: {lr}")
-
-    # 过滤掉 requires_grad=False 的冻结参数
+    # ---------------------------------------------------------
+    # 6. 训练准备与主循环
+    # ---------------------------------------------------------
     optimizer = AdamW(
         filter(lambda p: p.requires_grad, model.parameters()), 
         lr=lr, 
-        weight_decay=cfg['train']['weight_decay']
+        weight_decay=weight_decay
     )
     criterion = nn.CrossEntropyLoss()
-
-    # 初始化混合精度 Scaler (防溢出)
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
 
     best_val_acc = 0.0
+    best_epoch = 0
+    best_metrics = {}
+    patience = args.patience
+    patience_counter = 0
 
-    # 7. 循环训练
-    for epoch in range(cfg['train']['epochs']):
-        print(f"\n======== Epoch {epoch + 1}/{cfg['train']['epochs']} ========")
+    total_train_start_time = time.time()
+    completed_epochs = 0
+    max_epochs = cfg['train']['epochs']
+
+    # 初始化用于绘制学术论文曲线的数据字典
+    history = {
+        "epoch": [],
+        "train_loss": [],
+        "train_acc": [],
+        "val_loss": [],
+        "val_acc": [],
+        "epoch_time": []
+    }
+
+    from utils.engine import train_one_epoch, evaluate
+
+    for epoch in range(max_epochs):
+        epoch_start_time = time.time()
+        print(f"\n======== Epoch {epoch + 1}/{max_epochs} ========")
         
-        # 将 scaler 传入 engine 的 train_one_epoch
         try:
             train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device, scaler=scaler)
         except TypeError:
-            # 如果 utils/engine.py 暂不支持 scaler 参数，退回普通调用
             train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device)
 
-        print(f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f}")
-
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
-        print(f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
+        
+        epoch_time = time.time() - epoch_start_time
+        completed_epochs += 1
 
-        # 保存最佳模型权重
+        # 记录到 history 字典
+        history["epoch"].append(epoch + 1)
+        history["train_loss"].append(float(train_loss))
+        history["train_acc"].append(float(train_acc))
+        history["val_loss"].append(float(val_loss))
+        history["val_acc"].append(float(val_acc))
+        history["epoch_time"].append(float(epoch_time))
+
+        # 写入 TensorBoard 标量数据
+        tb_writer.add_scalar("Loss/Train", train_loss, epoch + 1)
+        tb_writer.add_scalar("Loss/Val", val_loss, epoch + 1)
+        tb_writer.add_scalar("Accuracy/Train", train_acc, epoch + 1)
+        tb_writer.add_scalar("Accuracy/Val", val_acc, epoch + 1)
+
+        print(f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f}")
+        print(f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
+        print(f"本轮训练耗时: {epoch_time:.2f}s")
+
         if val_acc > best_val_acc:
             best_val_acc = val_acc
+            best_epoch = epoch + 1
+            best_metrics = {
+                'train_loss': train_loss, 'train_acc': train_acc,
+                'val_loss': val_loss, 'val_acc': val_acc
+            }
+            patience_counter = 0
             best_model_path = os.path.join(ckpt_dir, "best.pth")
             
-            # 1. 解包原生模型（防止 DDP/多卡影响）
             raw_model = model.module if hasattr(model, 'module') else model
             
-            # 2. 以标准字典格式保存 checkpoint
             torch.save({
                 'model': raw_model.state_dict(),
                 'val_acc': best_val_acc,
-                'epoch': epoch + 1
+                'epoch': best_epoch
             }, best_model_path)
             
-            # 3. 将 HuggingFace 格式文件隔离保存到独立子目录，防止污染或覆盖 best.pth
             hf_save_dir = os.path.join(ckpt_dir, "hf_format")
             if hasattr(raw_model, 'save_pretrained'):
                 raw_model.save_pretrained(hf_save_dir)
             if hasattr(processor, 'save_pretrained'):
                 processor.save_pretrained(hf_save_dir)
                 
-            print(f"-> 已保存当前最佳模型到 {ckpt_dir} (Best Val Acc: {best_val_acc:.4f})")
+            print(f"-> 验证集准确率提升至 {best_val_acc:.4f}！最佳模型已保存至 {ckpt_dir}")
+        else:
+            patience_counter += 1
+            print(f"-> 验证集准确率未提升 ({val_acc:.4f} <= {best_val_acc:.4f})，早停计数器 Patience: {patience_counter}/{patience}")
+
+        if patience_counter >= patience:
+            print(f"\n[Early Stopping] 连续 {patience} 轮未提升，停止训练！")
+            break
+
+    # 保存训练过程历史记录为 JSON 文件，用于后续绘制 Loss / Acc 论文折线图
+    history_json_path = os.path.join(save_dir, "history.json")
+    with open(history_json_path, "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=4, ensure_ascii=False)
+
+    tb_writer.close()
+
+    total_time = time.time() - total_train_start_time
+    avg_epoch_time = total_time / completed_epochs if completed_epochs > 0 else 0.0
+
+    print("\n" + "="*20 + " 训练总结报告 " + "="*20)
+    print(f"实际训练总轮数: {completed_epochs}/{max_epochs}")
+    print(f"最佳模型出现轮数: Epoch {best_epoch}")
+    if best_metrics:
+        print(f"最佳轮次指标数据:")
+        print(f"  - Train Loss: {best_metrics['train_loss']:.4f} | Train Acc: {best_metrics['train_acc']:.4f}")
+        print(f"  - Val Loss  : {best_metrics['val_loss']:.4f} | Val Acc  : {best_metrics['val_acc']:.4f}")
+    print(f"训练历史指标已写入: {history_json_path}")
+    print(f"训练总耗时: {total_time:.2f}s ({total_time / 60:.2f} min)")
+    print(f"每轮平均耗时: {avg_epoch_time:.2f}s")
+    print("="*58)
 
 if __name__ == "__main__":
     main()

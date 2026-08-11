@@ -1,4 +1,0 @@
-#configs/yolo11_cls.yaml
-model:
-  name: "yolo11n-cls.pt"
-  type: "yolo11_cls"

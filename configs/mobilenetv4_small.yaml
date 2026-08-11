@@ -1,4 +1,0 @@
-#configs/mobilenetv4_small.yaml
-model:
-  name: "mobilenetv4_conv_small.e2400_r224_in1k"
-  type: "mobilenetv4_small"

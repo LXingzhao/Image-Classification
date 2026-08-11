@@ -1,0 +1,9 @@
+#configs/eva02_large.yaml
+model:
+  name: "eva02_large_patch14_224.mim_m38m"
+  type: "eva02"
+
+train:
+  batch_size: 16
+  lr: 0.00001
+  weight_decay: 0.05

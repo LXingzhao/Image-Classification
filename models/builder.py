@@ -107,27 +107,35 @@ class FeatureExtractorForClassification(nn.Module):
             self.classifier = nn.Linear(embed_dim, num_classes)
 
     def _get_embed_dim(self):
-        """自动推断 backbone 的特征输出维度"""
-        if hasattr(self.backbone, "config"):
-            cfg = self.backbone.config
-            # 优先精准识别 SAM2 的特征通道（Sam2VisionModel 的最后一层通道大小为 hidden_dim 或 output_channels[-1]）
-            if hasattr(cfg, "output_channels") and isinstance(cfg.output_channels, (list, tuple)):
-                return cfg.output_channels[-1]
-            if hasattr(cfg, "vision_config"):
-                vc = cfg.vision_config
-                if hasattr(vc, "output_channels") and isinstance(vc.output_channels, (list, tuple)):
-                    return vc.output_channels[-1]
-                if hasattr(vc, "hidden_size"):
-                    return vc.hidden_size
-            if hasattr(cfg, "hidden_dim"):
-                return cfg.hidden_dim
-            # 兼容 Depth Anything / DINOv2 等 backbone 的 hidden_sizes 列表配置
-            if hasattr(cfg, "hidden_sizes") and isinstance(cfg.hidden_sizes, (list, tuple)):
-                return cfg.hidden_sizes[-1]
-            for attr in ["hidden_size", "d_model", "embed_dim", "projection_dim", "num_features"]:
-                if hasattr(cfg, attr):
-                    return getattr(cfg, attr)
-        return getattr(self.backbone, "num_features", 768)
+            """自动推断 backbone 的特征输出维度"""
+            if hasattr(self.backbone, "config"):
+                cfg = self.backbone.config
+                # 1. 优先识别 SAM2 的特征通道
+                if hasattr(cfg, "output_channels") and isinstance(cfg.output_channels, (list, tuple)):
+                    return cfg.output_channels[-1]
+                if hasattr(cfg, "vision_config"):
+                    vc = cfg.vision_config
+                    if hasattr(vc, "output_channels") and isinstance(vc.output_channels, (list, tuple)):
+                        return vc.output_channels[-1]
+                    if hasattr(vc, "hidden_size"):
+                        return vc.hidden_size
+                if hasattr(cfg, "hidden_dim"):
+                    return cfg.hidden_dim
+                # 2. 兼容 Depth Anything / DINOv2 / Swin 等 backbone 的 hidden_sizes 列表配置
+                if hasattr(cfg, "hidden_sizes") and isinstance(cfg.hidden_sizes, (list, tuple)):
+                    return cfg.hidden_sizes[-1]
+                # 3. 兼容常规网络属性
+                for attr in ["hidden_size", "d_model", "embed_dim", "projection_dim", "num_features"]:
+                    if hasattr(cfg, attr):
+                        return getattr(cfg, attr)
+            
+            # 4. 如果 Config 中无法获取，尝试直接读取 Backbone 对象的属性
+            if hasattr(self.backbone, "num_features"):
+                return self.backbone.num_features
+            if hasattr(self.backbone, "embed_dim"):
+                return self.backbone.embed_dim
+
+            return 768  # 兜底默认维度
 
     def forward(self, x):
         if not self.is_custom_classifier:

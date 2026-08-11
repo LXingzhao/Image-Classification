@@ -1,0 +1,9 @@
+#configs/repvit_m15.yaml
+model:
+  name: "repvit_m1_5.dist_450e_in1k"
+  type: "repvit_m15"
+
+train:
+  batch_size: 32
+  lr: 0.0002
+  weight_decay: 0.01

@@ -1,4 +1,0 @@
-#configs/convnext_large.yaml
-model:
-  name: "convnext_large.fb_in22k_ft_in1k"
-  type: "convnext_large"

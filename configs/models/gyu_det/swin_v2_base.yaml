@@ -1,0 +1,9 @@
+#configs/swin_v2_base.yaml
+model:
+  name: "swinv2_base_window12to16_192to256.ms_in22k_ft_in1k"
+  type: "swin_v2_base"
+
+train:
+  batch_size: 16
+  lr: 0.00003
+  weight_decay: 0.05

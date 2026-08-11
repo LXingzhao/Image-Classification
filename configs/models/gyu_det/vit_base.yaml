@@ -1,0 +1,9 @@
+# configs/vit/vit_base.yaml
+model:
+  name: "google/vit-base-patch16-224"
+  type: "vit_base"
+
+train:
+  batch_size: 16
+  lr: 0.00003
+  weight_decay: 0.05

@@ -1,0 +1,8 @@
+# configs/datasets/CambridgeBridge.yaml
+dataset:
+  name: "CambridgeBridge"
+  type: "cambridge"                      # 用于 train.py/dataset.py 中匹配加载类
+  dir: "data/CambridgeBridgeDataset"
+  train_split: 0.7
+  val_split: 0.15
+  test_split: 0.15

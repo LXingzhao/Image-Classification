@@ -1,4 +1,0 @@
-#configs/fastvit_sa12.yaml
-model:
-  name: "fastvit_sa12.apple_in1k"
-  type: "fastvit_sa12"

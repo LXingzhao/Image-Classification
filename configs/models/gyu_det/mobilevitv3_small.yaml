@@ -1,0 +1,9 @@
+#configs/mobilevitv3_small.yaml
+model:
+  name: "apple/mobilevit-small"
+  type: "mobilevitv3_small"
+
+train:
+  batch_size: 32
+  lr: 0.0002
+  weight_decay: 0.01

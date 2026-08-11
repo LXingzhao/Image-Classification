@@ -1,4 +1,0 @@
-#configs/efficientvit_m2.yaml
-model:
-  name: "efficientvit_m2.r224_in1k"
-  type: "efficientvit_m2"

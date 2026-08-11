@@ -1,0 +1,9 @@
+# configs/depth_anything_v2.yaml
+model:
+  name: "depth-anything/Depth-Anything-V2-Base-hf"
+  type: "depth_anything_v2"
+
+train:
+  batch_size: 16
+  lr: 0.00001
+  weight_decay: 0.05

@@ -1,0 +1,9 @@
+#configs/convnextv2_tiny.yaml
+model:
+  name: "convnextv2_tiny.fcmae_ft_in22k_in1k"
+  type: "convnextv2_tiny"
+
+train:
+  batch_size: 32
+  lr: 0.0001
+  weight_decay: 0.01

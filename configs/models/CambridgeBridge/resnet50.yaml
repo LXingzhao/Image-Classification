@@ -1,0 +1,9 @@
+# configs/cnn/resnet50.yaml
+model:
+  name: "resnet50"
+  type: "resnet50"
+
+train:
+  batch_size: 32
+  lr: 0.0001
+  weight_decay: 0.01
