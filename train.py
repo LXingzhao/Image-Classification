@@ -20,6 +20,9 @@ def get_dataset_class(dataset_type: str):
     elif dataset_type in ["gyu_det", "gyu"]:
         from utils.dataset import GYUDETDataset
         return GYUDETDataset
+    elif dataset_type in ["sdnet2018", "sdnet"]:
+        from utils.dataset import SDNET2018Dataset
+        return SDNET2018Dataset
     else:
         raise ValueError(f"未知的数据集类型: {dataset_type}")
 
@@ -53,13 +56,15 @@ class Logger(object):
 
 def main():
     # ---------------------------------------------------------
-    # 1. 命令行参数配置（自动拼接 configs/models/ 和 configs/datasets/）
+    # 1. 命令行参数配置（兼容 SDNET2018/D 子类型路径）
     # ---------------------------------------------------------
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="dinov2_base", 
                         help="模型配置文件名称 (如 dinov2_base 或 vit_base)")
-    parser.add_argument("--dataset", type=str, default="CambridgeBridge", 
-                        help="数据集配置文件名称 (如 CambridgeBridge 或 gyu_det)")
+    parser.add_argument("--dataset", type=str, default="SDNET2018", 
+                        help="数据集名称或路径 (如 SDNET2018, SDNET2018/D, CambridgeBridge)")
+    parser.add_argument("--sub_type", type=str, default="D", 
+                        help="子数据集类型，针对 SDNET2018 可选: D, P, W, ALL")
     parser.add_argument("--config", type=str, default="", 
                         help="手动指定模型配置文件全路径")
     parser.add_argument("--dataset_config", type=str, default="", 
@@ -68,42 +73,57 @@ def main():
                         help="早停机制容忍轮数")
     args = parser.parse_args()
 
-    #  优先补全数据集配置文件路径 (configs/datasets/CambridgeBridge.yaml)
+    # 解析 dataset 与 sub_type（兼容 --dataset SDNET2018/D 格式）
+    dataset_input = args.dataset.replace("\\", "/")
+    sub_type = args.sub_type
+
+    if "/" in dataset_input:
+        parts = dataset_input.split("/")
+        dataset_base_name = parts[0]
+        sub_type = parts[1]
+    else:
+        dataset_base_name = dataset_input
+
+    # 优先补全数据集配置文件路径 (configs/datasets/SDNET2018.yaml)
     if not args.dataset_config:
-        dataset_filename = args.dataset if args.dataset.endswith(".yaml") else f"{args.dataset}.yaml"
+        dataset_filename = dataset_base_name if dataset_base_name.endswith(".yaml") else f"{dataset_base_name}.yaml"
         args.dataset_config = os.path.join("configs", "datasets", dataset_filename)
 
-    #  自动匹配数据集子目录下的模型配置文件 (configs/models/CambridgeBridge/vit_base.yaml)
+    # 自动匹配模型配置文件：优先找 configs/models/SDNET2018/D/vit_base.yaml
     if not args.config:
         dataset_name_from_path = os.path.splitext(os.path.basename(args.dataset_config))[0]
         model_filename = args.model if args.model.endswith(".yaml") else f"{args.model}.yaml"
         
-        # 优先寻找数据集专属模型配置
-        args.config = os.path.join("configs", "models", dataset_name_from_path, model_filename)
-        
-        # 降级备选：如果专属配置不存在，则尝试读取全局通用模型配置 (configs/models/vit_base.yaml)
-        if not os.path.exists(args.config):
-            fallback_path = os.path.join("configs", "models", model_filename)
-            if os.path.exists(fallback_path):
-                args.config = fallback_path
+        # 路径策略 1: configs/models/SDNET2018/D/vit_base.yaml
+        path_with_subtype = os.path.join("configs", "models", dataset_name_from_path, sub_type, model_filename) if sub_type else ""
+        # 路径策略 2: configs/models/SDNET2018/vit_base.yaml
+        path_with_dataset = os.path.join("configs", "models", dataset_name_from_path, model_filename)
+        # 路径策略 3: configs/models/vit_base.yaml
+        fallback_path = os.path.join("configs", "models", model_filename)
+
+        if path_with_subtype and os.path.exists(path_with_subtype):
+            args.config = path_with_subtype
+        elif os.path.exists(path_with_dataset):
+            args.config = path_with_dataset
+        elif os.path.exists(fallback_path):
+            args.config = fallback_path
+        else:
+            args.config = path_with_subtype if path_with_subtype else path_with_dataset
 
     # ---------------------------------------------------------
     # 2. 读取并合并配置
     # ---------------------------------------------------------
-    #  加载全局默认配置 (base)
     with open("configs/base_config.yaml", "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     if "train" not in cfg:
         cfg["train"] = {}
 
-    #  载入并合并数据集配置 (dataset)
     with open(args.dataset_config, "r", encoding="utf-8") as f:
         dataset_cfg = yaml.safe_load(f)
         cfg["dataset"] = dataset_cfg.get("dataset", {})
         if "train" in dataset_cfg and dataset_cfg["train"]:
             cfg["train"].update(dataset_cfg["train"])
 
-    #  载入并合并模型/专属超参数配置 (model，优先级最高)
     with open(args.config, "r", encoding="utf-8") as f:
         model_cfg = yaml.safe_load(f)
         cfg["model"] = model_cfg.get("model", {})
@@ -111,28 +131,25 @@ def main():
             cfg["train"].update(model_cfg["train"])
 
     # ---------------------------------------------------------
-    # 3. 构造输出路径：outputs/{dataset_name}/{YYYY-MM-DD}/{model_type}_exp1
+    # 3. 构造输出路径：outputs/SDNET2018_D/{YYYY-MM-DD}/{model_type}_exp1
     # ---------------------------------------------------------
     today_date = datetime.datetime.now().strftime("%Y-%m-%d")
-    dataset_name = cfg['dataset']['name']
     
-    # 修复命名规范：防止出现 vit_base_base_exp1
+    # 子类型区分输出文件夹
+    dataset_output_name = f"{cfg['dataset']['name']}_{sub_type}" if sub_type else cfg['dataset']['name']
+    
     model_type = cfg['model']['type']
     exp_name = f"{model_type}_exp1" if not model_type.endswith("_base") else f"{model_type[:-5]}_exp1"
     
-    # 按照数据集分类输出
-    save_dir = os.path.join("outputs", dataset_name, today_date, exp_name)
+    save_dir = os.path.join("outputs", dataset_output_name, today_date, exp_name)
     ckpt_dir = os.path.join(save_dir, "checkpoints")
     os.makedirs(ckpt_dir, exist_ok=True)
 
-    # 修改日志文件名：数据集_模型名称_log.txt
-    log_filename = f"{dataset_name}_{model_type}_log.txt"
+    log_filename = f"{dataset_output_name}_{model_type}_log.txt"
     log_file_path = os.path.join(save_dir, log_filename)
     sys.stdout = Logger(log_file_path)
 
-    # 初始化 TensorBoard 日志记录器
     tb_writer = SummaryWriter(log_dir=os.path.join(save_dir, "tb_logs"))
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     lr = float(cfg['train']['lr'])
@@ -142,14 +159,15 @@ def main():
     print(f"正在使用设备: {device}")
     print(f"加载模型配置: {args.config} | 数据集配置: {args.dataset_config}")
     print("================ 超参数与数据集配置 ================")
-    print(f"数据集 (Dataset Name): {cfg['dataset']['name']}")
-    print(f"数据集路径 (Data Dir): {cfg['dataset']['dir']}")
-    print(f"模型名称 (Model Type): {cfg['model']['type']}")  # 简称，例如: vit_base
-    print(f"模型ID (Model ID)    : {cfg['model']['name']}")  # HuggingFace ID，例如: google/vit-base-patch16-224
-    print(f"批次大小 (Batch Size): {cfg['train']['batch_size']}")
-    print(f"学习率 (Learning Rate): {cfg['train']['lr']}")
-    print(f"权重衰减 (Weight Decay): {cfg['train']['weight_decay']}")
-    print(f"输出保存路径: {save_dir}")
+    print(f"数据集名称 (Dataset Name) : {cfg['dataset']['name']}")
+    print(f"数据集子类型 (Sub Type)    : {sub_type}")
+    print(f"数据集路径 (Data Dir)     : {cfg['dataset']['dir']}")
+    print(f"模型名称 (Model Type)     : {cfg['model']['type']}")
+    print(f"模型ID (Model ID)         : {cfg['model']['name']}")
+    print(f"批次大小 (Batch Size)     : {cfg['train']['batch_size']}")
+    print(f"学习率 (Learning Rate)    : {cfg['train']['lr']}")
+    print(f"权重衰减 (Weight Decay)   : {cfg['train']['weight_decay']}")
+    print(f"输出保存路径              : {save_dir}")
     print("===================================================")
 
     # ---------------------------------------------------------
@@ -160,11 +178,16 @@ def main():
     _, processor = build_model_and_processor(cfg['model']['name'], num_classes=2, class_names=[])
     
     DatasetClass = get_dataset_class(cfg['dataset']['type'])
-    full_dataset = DatasetClass(cfg['dataset']['dir'], processor)
+    
+    # 针对 SDNET2018 传入 sub_type 参数
+    if DatasetClass.__name__ == "SDNET2018Dataset":
+        full_dataset = DatasetClass(cfg['dataset']['dir'], processor, sub_type=sub_type)
+    else:
+        full_dataset = DatasetClass(cfg['dataset']['dir'], processor)
     
     class_names = full_dataset.classes
     num_classes = len(class_names)
-    print(f"成功载入数据集！包含类别: {class_names}，总样本数: {len(full_dataset)}")
+    print(f"成功载入数据集 [{sub_type}]！包含类别: {class_names}，总样本数: {len(full_dataset)}")
 
     model, processor = build_model_and_processor(cfg['model']['name'], num_classes, class_names)
     model.to(device)
@@ -206,7 +229,6 @@ def main():
     completed_epochs = 0
     max_epochs = cfg['train']['epochs']
 
-    # 初始化用于绘制学术论文曲线的数据字典
     history = {
         "epoch": [],
         "train_loss": [],
@@ -232,7 +254,6 @@ def main():
         epoch_time = time.time() - epoch_start_time
         completed_epochs += 1
 
-        # 记录到 history 字典
         history["epoch"].append(epoch + 1)
         history["train_loss"].append(float(train_loss))
         history["train_acc"].append(float(train_acc))
@@ -240,7 +261,6 @@ def main():
         history["val_acc"].append(float(val_acc))
         history["epoch_time"].append(float(epoch_time))
 
-        # 写入 TensorBoard 标量数据
         tb_writer.add_scalar("Loss/Train", train_loss, epoch + 1)
         tb_writer.add_scalar("Loss/Val", val_loss, epoch + 1)
         tb_writer.add_scalar("Accuracy/Train", train_acc, epoch + 1)
@@ -283,7 +303,6 @@ def main():
             print(f"\n[Early Stopping] 连续 {patience} 轮未提升，停止训练！")
             break
 
-    # 保存训练过程历史记录为 JSON 文件，用于后续绘制 Loss / Acc 论文折线图
     history_json_path = os.path.join(save_dir, "history.json")
     with open(history_json_path, "w", encoding="utf-8") as f:
         json.dump(history, f, indent=4, ensure_ascii=False)
@@ -294,6 +313,7 @@ def main():
     avg_epoch_time = total_time / completed_epochs if completed_epochs > 0 else 0.0
 
     print("\n" + "="*20 + " 训练总结报告 " + "="*20)
+    print(f"训练集样本数: {len(train_dataset)} | 验证集样本数: {len(val_dataset)} | 测试集样本数: {len(test_dataset)}")
     print(f"实际训练总轮数: {completed_epochs}/{max_epochs}")
     print(f"最佳模型出现轮数: Epoch {best_epoch}")
     if best_metrics:

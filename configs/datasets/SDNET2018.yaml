@@ -1,0 +1,8 @@
+# configs/datasets/SDNET2018.yaml
+dataset:
+  name: "SDNET2018"
+  type: "sdnet2018"                    # 用于 train.py 中匹配 SDNET2018Dataset 加载类
+  dir: "data/SDNET2018"                 # 数据集根目录路径
+  train_split: 0.70                     # 70% 训练集
+  val_split: 0.15                      # 15% 验证集[cite: 1]
+  test_split: 0.15                     # 15% 测试集[cite: 1]

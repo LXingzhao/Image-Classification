@@ -1,0 +1,9 @@
+#configs/vit/clip_vit_l14.yaml
+model:
+  name: "openai/clip-vit-large-patch14"  # HuggingFace 官方权重名
+  type: "clip_vit_l14"
+
+train:
+  batch_size: 16
+  lr: 0.00001
+  weight_decay: 0.05

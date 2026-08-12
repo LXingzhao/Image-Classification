@@ -1,0 +1,9 @@
+#configs/mobilenetv4_small.yaml
+model:
+  name: "mobilenetv4_conv_small.e2400_r224_in1k"
+  type: "mobilenetv4_small"
+
+train:
+  batch_size: 32
+  lr: 0.0005
+  weight_decay: 0.0001

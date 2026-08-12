@@ -1,0 +1,9 @@
+#configs/efficientformerv2_s.yaml
+model:
+  name: "efficientformerv2_s1.snap_dist_in1k"
+  type: "efficientformerv2_s"
+
+train:
+  batch_size: 32
+  lr: 0.0002
+  weight_decay: 0.01

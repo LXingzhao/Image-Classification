@@ -1,0 +1,9 @@
+#configs/mambavision_base.yaml
+model:
+  name: "mambaout_base.in1k"
+  type: "mambavision_base"
+
+train:
+  batch_size: 16
+  lr: 0.00003
+  weight_decay: 0.05

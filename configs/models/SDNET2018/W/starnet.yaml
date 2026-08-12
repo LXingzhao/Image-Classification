@@ -1,0 +1,9 @@
+#configs/starnet.yaml
+model:
+  name: "starnet_s1"
+  type: "starnet"
+
+train:
+  batch_size: 32
+  lr: 0.0003
+  weight_decay: 0.01

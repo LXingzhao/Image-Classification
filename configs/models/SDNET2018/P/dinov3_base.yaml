@@ -1,0 +1,9 @@
+#configs/dinov3_base.yaml
+model:
+  name: "facebook/dinov3-base"
+  type: "dinov3_base"
+
+train:
+  batch_size: 16
+  lr: 0.00002
+  weight_decay: 0.01

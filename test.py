@@ -5,6 +5,7 @@ import time
 import yaml
 import torch
 import argparse
+import pandas as pd
 from torch.utils.data import DataLoader, random_split
 from sklearn.metrics import classification_report, accuracy_score
 from tqdm import tqdm
@@ -19,6 +20,9 @@ def get_dataset_class(dataset_type: str):
     elif dataset_type in ["gyu_det", "gyu"]:
         from utils.dataset import GYUDETDataset
         return GYUDETDataset
+    elif dataset_type in ["sdnet2018", "sdnet"]:
+        from utils.dataset import SDNET2018Dataset
+        return SDNET2018Dataset
     else:
         raise ValueError(f"未知的数据集类型: {dataset_type}")
 
@@ -48,31 +52,48 @@ def main():
     parser = argparse.ArgumentParser(description="评估模型在测试集上的表现")
     parser.add_argument("--model", type=str, default="dinov2_base", 
                         help="模型配置文件名称 (如 dinov2_base 或 vit_base)")
-    parser.add_argument("--dataset", type=str, default="CambridgeBridge", 
-                        help="数据集配置文件名称 (如 CambridgeBridge 或 gyu_det)")
+    parser.add_argument("--dataset", type=str, default="SDNET2018", 
+                        help="数据集配置文件名称 (如 SDNET2018 或 CambridgeBridge)")
+    parser.add_argument("--sub_type", type=str, default="D", 
+                        help="子数据集类型，针对 SDNET2018 可选: D, P, W, ALL")
     parser.add_argument("--config", type=str, default="", help="手动指定模型配置文件全路径")
     parser.add_argument("--dataset_config", type=str, default="", help="手动指定数据集配置文件全路径")
     parser.add_argument("--ckpt_dir", type=str, default=None, help="手动指定权重保存目录路径")
     args = parser.parse_args()
 
-    # 优先补全数据集配置文件路径 (configs/datasets/CambridgeBridge.yaml)
+    # 解析 dataset 与 sub_type
+    dataset_input = args.dataset.replace("\\", "/")
+    sub_type = args.sub_type
+
+    if "/" in dataset_input:
+        parts = dataset_input.split("/")
+        dataset_base_name = parts[0]
+        sub_type = parts[1]
+    else:
+        dataset_base_name = dataset_input
+
+    # 优先补全数据集配置文件路径 (configs/datasets/SDNET2018.yaml)
     if not args.dataset_config:
-        dataset_filename = args.dataset if args.dataset.endswith(".yaml") else f"{args.dataset}.yaml"
+        dataset_filename = dataset_base_name if dataset_base_name.endswith(".yaml") else f"{dataset_base_name}.yaml"
         args.dataset_config = os.path.join("configs", "datasets", dataset_filename)
 
-    # 自动匹配数据集子目录下的模型配置文件 (configs/models/CambridgeBridge/vit_base.yaml)
+    # 自动匹配模型配置文件：优先找 configs/models/SDNET2018/D/vit_base.yaml
     if not args.config:
         dataset_name_from_path = os.path.splitext(os.path.basename(args.dataset_config))[0]
         model_filename = args.model if args.model.endswith(".yaml") else f"{args.model}.yaml"
         
-        # 优先寻找数据集专属模型配置
-        args.config = os.path.join("configs", "models", dataset_name_from_path, model_filename)
-        
-        # 降级备选：如果专属配置不存在，则尝试读取全局通用模型配置 (configs/models/vit_base.yaml)
-        if not os.path.exists(args.config):
-            fallback_path = os.path.join("configs", "models", model_filename)
-            if os.path.exists(fallback_path):
-                args.config = fallback_path
+        path_with_subtype = os.path.join("configs", "models", dataset_name_from_path, sub_type, model_filename) if sub_type else ""
+        path_with_dataset = os.path.join("configs", "models", dataset_name_from_path, model_filename)
+        fallback_path = os.path.join("configs", "models", model_filename)
+
+        if path_with_subtype and os.path.exists(path_with_subtype):
+            args.config = path_with_subtype
+        elif os.path.exists(path_with_dataset):
+            args.config = path_with_dataset
+        elif os.path.exists(fallback_path):
+            args.config = fallback_path
+        else:
+            args.config = path_with_subtype if path_with_subtype else path_with_dataset
 
     # ---------------------------------------------------------
     # 1. 读取并深度合并配置
@@ -99,14 +120,14 @@ def main():
     # ---------------------------------------------------------
     # 2. 定位按数据集隔离的权重与日志路径
     # ---------------------------------------------------------
-    dataset_name = cfg['dataset']['name']
+    dataset_output_name = f"{cfg['dataset']['name']}_{sub_type}" if sub_type else cfg['dataset']['name']
     model_type = cfg['model']['type']
     exp_name = f"{model_type}_exp1" if not model_type.endswith("_base") else f"{model_type[:-5]}_exp1"
     
     if args.ckpt_dir is not None:
         ckpt_dir = args.ckpt_dir
     else:
-        outputs_dataset_root = os.path.join("outputs", dataset_name)
+        outputs_dataset_root = os.path.join("outputs", dataset_output_name)
         ckpt_dir = ""
         if os.path.exists(outputs_dataset_root):
             all_dates = sorted([d for d in os.listdir(outputs_dataset_root) if os.path.isdir(os.path.join(outputs_dataset_root, d))], reverse=True)
@@ -118,15 +139,13 @@ def main():
 
     if not os.path.exists(ckpt_dir):
         raise FileNotFoundError(
-            f"\n[错误] 未在数据集【{dataset_name}】路径下找到模型【{cfg['model']['type']}】的权重目录: {ckpt_dir}\n"
+            f"\n[错误] 未在数据集【{dataset_output_name}】路径下找到模型【{cfg['model']['type']}】的权重目录: {ckpt_dir}\n"
             f"请先运行训练命令: python train.py --model {args.model} --dataset {args.dataset}"
         )
 
-    # 重定向测试日志：自动匹配该文件夹下的 _log.txt 日志文件
     save_dir = os.path.dirname(ckpt_dir)
     log_file_path = None
 
-    # 寻找以 _log.txt 结尾的文件，或者默认的 train_log.txt
     for file in os.listdir(save_dir):
         if file.endswith("_log.txt") or file == "train_log.txt":
             log_file_path = os.path.join(save_dir, file)
@@ -139,7 +158,7 @@ def main():
         print("[提示] 未匹配到已有训练日志文件，测试打印将仅在控制台显示。")
 
     print("\n" + "="*20 + " 开始测试集评估 " + "="*20)
-    print(f"评估数据集: {dataset_name}")
+    print(f"评估数据集: {dataset_output_name}")
     print(f"正在使用设备进行测试: {device}")
     print(f"即将从以下路径加载最佳模型权重: {ckpt_dir}")
 
@@ -149,7 +168,10 @@ def main():
     _, processor = build_model_and_processor(cfg['model']['name'], num_classes=2, class_names=[])
     
     DatasetClass = get_dataset_class(cfg['dataset']['type'])
-    full_dataset = DatasetClass(cfg['dataset']['dir'], processor)
+    if DatasetClass.__name__ == "SDNET2018Dataset":
+        full_dataset = DatasetClass(cfg['dataset']['dir'], processor, sub_type=sub_type)
+    else:
+        full_dataset = DatasetClass(cfg['dataset']['dir'], processor)
     
     class_names = full_dataset.classes
     num_classes = len(class_names)
@@ -159,14 +181,17 @@ def main():
     val_size = int(cfg['dataset']['val_split'] * total_size)
     test_size = total_size - train_size - val_size
 
-    _, _, test_dataset = random_split(
+    train_dataset, val_dataset, test_dataset = random_split(
         full_dataset, [train_size, val_size, test_size],
         generator=torch.Generator().manual_seed(cfg['seed'])
     )
 
     batch_size = int(cfg['train']['batch_size'])
+    # 注意：shuffle=False 保证顺序与 index 对应，便于记录图片路径
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    print(f"测试集准备就绪，包含类别: {class_names}，测试集样本数: {len(test_dataset)}")
+    
+    print(f"划分情况 -> 训练集: {len(train_dataset)} | 验证集: {len(val_dataset)} | 测试集: {len(test_dataset)}")
+    print(f"测试集准备就绪，包含类别: {class_names}")
 
     # ---------------------------------------------------------
     # 4. 实例化模型并加载权重
@@ -193,7 +218,7 @@ def main():
     model.to(device)
 
     # ---------------------------------------------------------
-    # 5. 执行评估（统计推理时间与保存预测概率）
+    # 5. 执行评估（统计推理时间与保存具体每张图片的分类结果）
     # ---------------------------------------------------------
     model.eval()
     all_preds = []
@@ -218,8 +243,12 @@ def main():
 
     test_total_time = time.time() - test_start_time
 
-    # 保存测试结果字典用于后续绘图 (混淆矩阵 / ROC / PR)
+    # 获取测试集中每张图片的绝对/相对路径
+    test_img_paths = [full_dataset.samples[i][0] for i in test_dataset.indices]
+
+    # 保存原始数据 PyTorch 格式字典
     test_results = {
+        "img_paths": test_img_paths,
         "class_names": class_names,
         "labels": all_labels,
         "preds": all_preds,
@@ -227,7 +256,27 @@ def main():
     }
     results_save_path = os.path.join(save_dir, "test_results.pth")
     torch.save(test_results, results_save_path)
-    print(f"\n[保存成功] 测试集评估细节已保存至: {results_save_path}")
+
+    # 导出逐张图片的明细表 CSV 文件
+    detailed_rows = []
+    for img_path, label, pred, prob in zip(test_img_paths, all_labels, all_preds, all_probs):
+        row = {
+            "图片名称": os.path.basename(img_path),
+            "图片路径": img_path,
+            "真实标签": class_names[label],
+            "预测标签": class_names[pred],
+            "预测是否正确": "正确" if label == pred else "错误"
+        }
+        for idx, cls_n in enumerate(class_names):
+            row[f"概率_{cls_n}"] = round(prob[idx], 4)
+        detailed_rows.append(row)
+
+    df_details = pd.DataFrame(detailed_rows)
+    details_csv_path = os.path.join(save_dir, "test_details.csv")
+    df_details.to_csv(details_csv_path, index=False, encoding="utf-8-sig")
+
+    print(f"\n[保存成功] 测试集汇总已保存至: {results_save_path}")
+    print(f"[导出成功] 单张图片分类明细表已保存至: {details_csv_path}")
 
     # ---------------------------------------------------------
     # 6. 打印评估报告
@@ -237,6 +286,7 @@ def main():
     
     acc = accuracy_score(all_labels, all_preds)
     print(f"测试集准确率 (Overall Accuracy): {acc * 100:.2f}%")
+    print(f"测试集样本数: {len(test_dataset)}")
     print(f"测试集推理评估总耗时 (Test Total Time): {test_total_time:.2f}s")
     print("="*58)
 
