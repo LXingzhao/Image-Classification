@@ -14,6 +14,15 @@ CLASS_TRANSLATION = {
     "Crack": "有裂缝"
 }
 
+def format_time(seconds):
+    """时间格式化辅助函数：若 >= 60秒，显示为 xx.xx min；否则显示为 xx.xx s"""
+    if seconds is None:
+        return None
+    if seconds >= 60:
+        return f"{seconds / 60:.2f} min"
+    else:
+        return f"{seconds:.2f} s"
+
 def parse_log_file(log_path):
     """解析单个 log.txt 文件并提取数据项"""
     with open(log_path, 'r', encoding='utf-8') as f:
@@ -30,7 +39,7 @@ def parse_log_file(log_path):
     if len(path_parts) >= 4:
         data["日期\nDate"] = path_parts[-3]
 
-    # 1. 提取配置与超参数 (增加兼容性匹配)
+    # 1. 提取配置与超参数 (兼容性正则匹配)
     dataset_m = re.search(r"数据集名称\s*\(Dataset Name\)\s*[:：]\s*([^\n]+)", content)
     sub_type_m = re.search(r"数据集子类型\s*\(Sub Type\)\s*[:：]\s*([^\n]+)", content)
     
@@ -78,27 +87,32 @@ def parse_log_file(log_path):
         if num_test_samples:
             data["测试集样本\nTest Size"] = num_test_samples
 
-    # 3. 训练指标与轮数
+    # 3. 训练指标与时间
     train_epochs = re.search(r"实际训练总轮数:\s*(\d+)/(\d+)", content)
     if train_epochs:
-        data["训练轮数\nEpochs"] = f"{train_epochs.group(1)}/{train_epochs.group(2)}"
+        data["训练轮数\nTrain Epochs"] = f"{train_epochs.group(1)}/{train_epochs.group(2)}"
 
     best_epoch = re.search(r"最佳模型出现轮数:\s*Epoch\s*(\d+)", content)
-    data["最佳轮次\nBest Epoch"] = int(best_epoch.group(1)) if best_epoch else None
+    data["验证最佳轮次\nVal Best Epoch"] = int(best_epoch.group(1)) if best_epoch else None
 
     best_val_loss = re.search(r"Val Loss\s*:\s*([\d\.]+)\s*\|\s*Val Acc\s*:\s*([\d\.]+)", content)
     if best_val_loss:
-        data["验证集准确率\nVal Acc [Best]"] = float(best_val_loss.group(2))
-        data["验证集损失\nVal Loss [Best]"] = float(best_val_loss.group(1))
+        data["验证集最佳准确率\nVal Acc [Best Epoch]"] = float(best_val_loss.group(2))
+        data["验证集最佳损失\nVal Loss [Best Epoch]"] = float(best_val_loss.group(1))
 
     best_train_loss = re.search(r"Train Loss:\s*([\d\.]+)\s*\|\s*Train Acc:\s*([\d\.]+)", content)
     if best_train_loss:
-        data["最佳轮训练准确率\nTrain Acc [Val Best]"] = float(best_train_loss.group(2))
-        data["最佳轮训练损失\nTrain Loss [Val Best]"] = float(best_train_loss.group(1))
+        data["训练集最佳轮准确率\nTrain Acc [Best Epoch]"] = float(best_train_loss.group(2))
+        data["训练集最佳轮损失\nTrain Loss [Best Epoch]"] = float(best_train_loss.group(1))
 
-    # 时间与延迟
+    # 训练时间（总耗时 & 平均单轮耗时）
+    total_train_time = re.search(r"训练总耗时:\s*([\d\.]+)s", content)
+    if total_train_time:
+        data["训练总耗时\nTrain Total Time"] = format_time(float(total_train_time.group(1)))
+
     avg_train_time = re.search(r"每轮平均耗时:\s*([\d\.]+)s", content)
-    data["单轮耗时\nEpoch Time (s)"] = float(avg_train_time.group(1)) if avg_train_time else None
+    if avg_train_time:
+        data["训练平均单轮耗时\nTrain Avg Epoch Time"] = format_time(float(avg_train_time.group(1)))
 
     # 4. 测试集评估指标
     test_acc = re.search(r"测试集准确率 \(Overall Accuracy\):\s*([\d\.]+)%", content)
@@ -107,22 +121,22 @@ def parse_log_file(log_path):
     test_time = re.search(r"测试集推理评估总耗时 \(Test Total Time\):\s*([\d\.]+)s", content)
     if test_time:
         total_time_s = float(test_time.group(1))
-        data["测试总耗时\nTest Time (s)"] = total_time_s
+        data["测试总耗时\nTest Total Time"] = format_time(total_time_s)
         if num_test_samples:
-            data["推理延迟\nLatency (ms/img)"] = round((total_time_s / num_test_samples) * 1000, 2)
+            data["推理单张延迟\nLatency (ms/img)"] = round((total_time_s / num_test_samples) * 1000, 2)
 
     # 5. 全局 Average 指标
     macro_avg = re.search(r"macro avg\s+([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)\s+(\d+)", content)
     if macro_avg:
-        data["宏精准度\nMacro Prec"] = float(macro_avg.group(1))
-        data["宏召回率\nMacro Rec"] = float(macro_avg.group(2))
-        data["宏F1\nMacro F1"] = float(macro_avg.group(3))
+        data["测试宏精准度\nMacro Prec"] = float(macro_avg.group(1))
+        data["测试宏召回率\nMacro Rec"] = float(macro_avg.group(2))
+        data["测试宏F1\nMacro F1"] = float(macro_avg.group(3))
 
     weighted_avg = re.search(r"weighted avg\s+([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)\s+(\d+)", content)
     if weighted_avg:
-        data["加权精准度\nWeighted Prec"] = float(weighted_avg.group(1))
-        data["加权召回率\nWeighted Rec"] = float(weighted_avg.group(2))
-        data["加权F1\nWeighted F1"] = float(weighted_avg.group(3))
+        data["测试加权精准度\nWeighted Prec"] = float(weighted_avg.group(1))
+        data["测试加权召回率\nWeighted Rec"] = float(weighted_avg.group(2))
+        data["测试加权F1\nWeighted F1"] = float(weighted_avg.group(3))
 
     # 6. 解析分类报告，按类别提取 F1
     report_block_m = re.search(r"===+\s*最终评估结果\s*===+([\s\S]+?)==========================================", content)
@@ -140,7 +154,7 @@ def parse_log_file(log_path):
                     continue
                     
                 zh_name = CLASS_TRANSLATION.get(cls_name, cls_name)
-                col_label = f"{zh_name}(F1)\n{cls_name} F1"
+                col_label = f"测试-{zh_name}(F1)\n{cls_name} F1"
                 data[col_label] = f1_val
 
     return data
@@ -179,19 +193,39 @@ def main():
 
     df = pd.DataFrame(all_data)
 
+    # 按照严格的分类逻辑进行列排序
     preferred_order = [
-        "日期\nDate", "数据集\nDataset",
-        "模型名称\nModel", "模型ID\nModel ID", 
-        "训练集样本\nTrain Size", "验证集样本\nVal Size", "测试集样本\nTest Size",
+        # 元信息与超参数
+        "日期\nDate", "数据集\nDataset", "模型名称\nModel", "模型ID\nModel ID", 
         "学习率\nLR", "批次大小\nBatch Size", "权重衰减\nWeight Decay",
+        
+        # 紧跟超参数的测试集准确率
         "测试集准确率\nTest Acc (%)", 
-        "最佳轮次\nBest Epoch", "训练轮数\nEpochs",
-        "验证集准确率\nVal Acc [Best]", "验证集损失\nVal Loss [Best]",
-        "最佳轮训练准确率\nTrain Acc [Val Best]", "最佳轮训练损失\nTrain Loss [Val Best]",
-        "推理延迟\nLatency (ms/img)", "测试总耗时\nTest Time (s)", "单轮耗时\nEpoch Time (s)",
-        "宏F1\nMacro F1", "加权F1\nWeighted F1",
-        "宏精准度\nMacro Prec", "宏召回率\nMacro Rec",
-        "加权精准度\nWeighted Prec", "加权召回率\nWeighted Rec"
+        
+        # 【训练相关列】
+        "训练集样本\nTrain Size", 
+        "训练轮数\nTrain Epochs", 
+        "训练集最佳轮准确率\nTrain Acc [Best Epoch]", 
+        "训练集最佳轮损失\nTrain Loss [Best Epoch]", 
+        "训练总耗时\nTrain Total Time", 
+        "训练平均单轮耗时\nTrain Avg Epoch Time",
+        
+        # 【验证相关列】
+        "验证集样本\nVal Size", 
+        "验证最佳轮次\nVal Best Epoch", 
+        "验证集最佳准确率\nVal Acc [Best Epoch]", 
+        "验证集最佳损失\nVal Loss [Best Epoch]",
+        
+        # 【测试相关列】
+        "测试集样本\nTest Size", 
+        "测试总耗时\nTest Total Time", 
+        "推理单张延迟\nLatency (ms/img)",
+        "测试宏F1\nMacro F1", 
+        "测试加权F1\nWeighted F1",
+        "测试宏精准度\nMacro Prec", 
+        "测试宏召回率\nMacro Rec",
+        "测试加权精准度\nWeighted Prec", 
+        "测试加权召回率\nWeighted Rec"
     ]
 
     existing_cols = [c for c in preferred_order if c in df.columns]
@@ -216,16 +250,23 @@ def main():
             bottom=Side(style='thin', color='D9D9D9')
         )
         
-        worksheet.row_dimensions[1].height = 38
+        # 增加表头行高度，避免多行挤压
+        worksheet.row_dimensions[1].height = 45
+
         for col_idx, col in enumerate(worksheet.columns, start=1):
             cell = worksheet.cell(row=1, column=col_idx)
             cell.fill = header_fill
             cell.font = header_font
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             
+            # 计算表头每行最大视觉显示宽度（考虑中文字符约占 2 个英文字符宽度）
             lines = str(cell.value).split('\n')
-            max_header_line_len = max(len(line) for line in lines) if lines else 0
-            
+            max_header_display_len = 0
+            for line in lines:
+                line_len = sum(2 if ord(c) > 127 else 1 for c in line)
+                if line_len > max_header_display_len:
+                    max_header_display_len = line_len
+
             max_data_len = 0
             for row_idx in range(2, len(df) + 2):
                 data_cell = worksheet.cell(row=row_idx, column=col_idx)
@@ -237,13 +278,14 @@ def main():
                     max_data_len = len(val_str)
             
             col_letter = cell.column_letter
-            calc_width = max(max_header_line_len + 5, max_data_len + 4, 14)
-            worksheet.column_dimensions[col_letter].width = min(calc_width, 35)
+            # 给予充足的宽度 buffer，防止英文/数字在最后折行截断
+            calc_width = max(max_header_display_len + 4, max_data_len + 5, 16)
+            worksheet.column_dimensions[col_letter].width = min(calc_width, 42)
 
         for row_idx in range(2, len(df) + 2):
             worksheet.row_dimensions[row_idx].height = 22
 
-    print(f"\n[导出成功] 表格字段与样本数统计更新完成，保存至: {output_excel_path}")
+    print(f"\n[导出成功] 表格排版与排版细节已彻底修正，保存至: {output_excel_path}")
 
 
 if __name__ == "__main__":
