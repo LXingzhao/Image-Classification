@@ -32,12 +32,6 @@ def parse_log_file(log_path):
     content = content.replace('\xa0', ' ').replace('\u3000', ' ')
 
     data = {}
-    
-    # 0. 实验元信息（仅保留日期）
-    normalized_path = log_path.replace('\\', '/')
-    path_parts = normalized_path.split('/')
-    if len(path_parts) >= 4:
-        data["日期\nDate"] = path_parts[-3]
 
     # 1. 提取配置与超参数 (兼容性正则匹配)
     dataset_m = re.search(r"数据集名称\s*\(Dataset Name\)\s*[:：]\s*([^\n]+)", content)
@@ -193,10 +187,10 @@ def main():
 
     df = pd.DataFrame(all_data)
 
-    # 按照严格的分类逻辑进行列排序
+    # 按照严格的分类逻辑进行列排序（已移除日期列）
     preferred_order = [
         # 元信息与超参数
-        "日期\nDate", "数据集\nDataset", "模型名称\nModel", "模型ID\nModel ID", 
+        "数据集\nDataset", "模型名称\nModel", "模型ID\nModel ID", 
         "学习率\nLR", "批次大小\nBatch Size", "权重衰减\nWeight Decay",
         
         # 紧跟超参数的测试集准确率
