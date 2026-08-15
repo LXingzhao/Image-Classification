@@ -233,8 +233,9 @@ def main():
         
         worksheet = writer.sheets["模型评估汇总"]
         
-        header_fill = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
-        header_font = Font(name="Microsoft YaHei", size=10, bold=True, color="FFFFFF")
+        # 保持 size=10 不变，仅更换极简浅灰背景与深黑高对比文字
+        header_fill = PatternFill(start_color="F2F4F7", end_color="F2F4F7", fill_type="solid")
+        header_font = Font(name="Microsoft YaHei", size=10, bold=True, color="1F2937")
         data_font = Font(name="Microsoft YaHei", size=9.5)
         
         thin_border = Border(
