@@ -1,0 +1,9 @@
+# configs/cnn/resnet34.yaml
+model:
+  name: "resnet34"
+  type: "resnet34"
+
+train:
+  batch_size: 32
+  lr: 0.0001
+  weight_decay: 0.01
