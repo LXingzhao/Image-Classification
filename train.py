@@ -130,22 +130,29 @@ def main():
         if "train" in model_cfg and model_cfg["train"]:
             cfg["train"].update(model_cfg["train"])
 
-    # ---------------------------------------------------------
-    # 3. 构造输出路径：outputs/SDNET2018_D/{YYYY-MM-DD}/{model_type}_exp1
+# ---------------------------------------------------------
+    # 3. 构造输出路径：outputs/SDNET2018/D/{YYYY-MM-DD}/{model_type}_exp1
     # ---------------------------------------------------------
     today_date = datetime.datetime.now().strftime("%Y-%m-%d")
     
-    # 子类型区分输出文件夹
-    dataset_output_name = f"{cfg['dataset']['name']}_{sub_type}" if sub_type else cfg['dataset']['name']
+    # 提取数据集名称与子类型，构建多级输出文件夹
+    dataset_name = cfg['dataset']['name']
+    
+    if sub_type:
+        save_dir = os.path.join("outputs", dataset_name, sub_type, today_date, exp_name)
+        log_prefix = f"{dataset_name}_{sub_type}"
+    else:
+        save_dir = os.path.join("outputs", dataset_name, today_date, exp_name)
+        log_prefix = dataset_name
     
     model_type = cfg['model']['type']
     exp_name = f"{model_type}_exp1" if not model_type.endswith("_base") else f"{model_type[:-5]}_exp1"
     
-    save_dir = os.path.join("outputs", dataset_output_name, today_date, exp_name)
+    save_dir = os.path.join("outputs", dataset_name, sub_type, today_date, exp_name) if sub_type else os.path.join("outputs", dataset_name, today_date, exp_name)
     ckpt_dir = os.path.join(save_dir, "checkpoints")
     os.makedirs(ckpt_dir, exist_ok=True)
 
-    log_filename = f"{dataset_output_name}_{model_type}_log.txt"
+    log_filename = f"{log_prefix}_{model_type}_log.txt"
     log_file_path = os.path.join(save_dir, log_filename)
     sys.stdout = Logger(log_file_path)
 
