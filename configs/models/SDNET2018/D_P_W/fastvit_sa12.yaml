@@ -1,0 +1,9 @@
+#configs/fastvit_sa12.yaml
+model:
+  name: "fastvit_sa12.apple_in1k"
+  type: "fastvit_sa12"
+
+train:
+  batch_size: 32
+  lr: 0.0002
+  weight_decay: 0.01

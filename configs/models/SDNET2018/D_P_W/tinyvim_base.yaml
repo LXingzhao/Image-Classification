@@ -1,0 +1,9 @@
+#configs/tinyvim_base.yaml
+model:
+  name: "timm/tiny_vit_21m_224.dist_in22k_ft_in1k"
+  type: "tinyvim_base"
+
+train:
+  batch_size: 32
+  lr: 0.0001
+  weight_decay: 0.01

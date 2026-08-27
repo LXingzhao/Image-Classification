@@ -1,0 +1,9 @@
+#configs/sam2_hiera_base.yaml
+model:
+  name: "facebook/sam2-hiera-base-plus-hf"
+  type: "sam2_hiera_base"
+
+train:
+  batch_size: 16
+  lr: 0.00002
+  weight_decay: 0.05

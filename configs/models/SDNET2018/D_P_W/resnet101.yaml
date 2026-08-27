@@ -1,0 +1,9 @@
+# configs/cnn/resnet101.yaml
+model:
+  name: "resnet101"
+  type: "resnet101"
+
+train:
+  batch_size: 32
+  lr: 0.0001
+  weight_decay: 0.01

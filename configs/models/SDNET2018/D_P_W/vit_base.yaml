@@ -1,0 +1,7 @@
+model:
+  name: google/vit-base-patch16-224
+  type: vit_base
+train:
+  batch_size: 16
+  lr: 1.0253509690168497e-05
+  weight_decay: 0.00029380279387035364
