@@ -8,7 +8,7 @@ import json
 import yaml
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, ConcatDataset
 from torch.optim import AdamW
 from torch.utils.tensorboard import SummaryWriter
 
@@ -64,7 +64,7 @@ def main():
     parser.add_argument("--dataset", type=str, default="SDNET2018", 
                         help="数据集名称或路径 (如 SDNET2018, SDNET2018/D, CambridgeBridge)")
     parser.add_argument("--sub_type", type=str, default="D", 
-                        help="子数据集类型，针对 SDNET2018 可选: D, P, W, ALL")
+                        help="子数据集类型，针对 SDNET2018 可选: D, P, W, D_P_W, ALL")
     parser.add_argument("--config", type=str, default="", 
                         help="手动指定模型配置文件全路径")
     parser.add_argument("--dataset_config", type=str, default="", 
@@ -130,16 +130,13 @@ def main():
         if "train" in model_cfg and model_cfg["train"]:
             cfg["train"].update(model_cfg["train"])
 
-# ---------------------------------------------------------
-    # 3. 构造输出路径：outputs/SDNET2018/D/{YYYY-MM-DD}/{model_type}_exp1
+    # ---------------------------------------------------------
+    # 3. 构造输出路径：outputs/SDNET2018/D_P_W/{YYYY-MM-DD}/{model_type}_exp1
     # ---------------------------------------------------------
     today_date = datetime.datetime.now().strftime("%Y-%m-%d")
-    
-    # 提取数据集名称与子类型，构建多级输出文件夹
     dataset_name = cfg['dataset']['name']
     model_type = cfg['model']['type']
     
-    # ✅ 调整顺序：先生成 exp_name，再构造 save_dir
     exp_name = f"{model_type}_exp1" if not model_type.endswith("_base") else f"{model_type[:-5]}_exp1"
     
     if sub_type:
@@ -149,7 +146,6 @@ def main():
         save_dir = os.path.join("outputs", dataset_name, today_date, exp_name)
         log_prefix = dataset_name
     
-    save_dir = os.path.join("outputs", dataset_name, sub_type, today_date, exp_name) if sub_type else os.path.join("outputs", dataset_name, today_date, exp_name)
     ckpt_dir = os.path.join(save_dir, "checkpoints")
     os.makedirs(ckpt_dir, exist_ok=True)
 
@@ -179,7 +175,7 @@ def main():
     print("===================================================")
 
     # ---------------------------------------------------------
-    # 4. 构建数据与模型
+    # 4. 构建数据与模型（支持 D_P_W 合并数据加载）
     # ---------------------------------------------------------
     from models.builder import build_model_and_processor
 
@@ -187,13 +183,20 @@ def main():
     
     DatasetClass = get_dataset_class(cfg['dataset']['type'])
     
-    # 针对 SDNET2018 传入 sub_type 参数
+    # 针对 SDNET2018 判断是否需要合并 D, P, W 训练
     if DatasetClass.__name__ == "SDNET2018Dataset":
-        full_dataset = DatasetClass(cfg['dataset']['dir'], processor, sub_type=sub_type)
+        if sub_type in ["D_P_W", "ALL"]:
+            sub_list = ["D", "P", "W"]
+            sub_datasets = [DatasetClass(cfg['dataset']['dir'], processor, sub_type=st) for st in sub_list]
+            full_dataset = ConcatDataset(sub_datasets)
+            class_names = sub_datasets[0].classes
+        else:
+            full_dataset = DatasetClass(cfg['dataset']['dir'], processor, sub_type=sub_type)
+            class_names = full_dataset.classes
     else:
         full_dataset = DatasetClass(cfg['dataset']['dir'], processor)
+        class_names = full_dataset.classes
     
-    class_names = full_dataset.classes
     num_classes = len(class_names)
     print(f"成功载入数据集 [{sub_type}]！包含类别: {class_names}，总样本数: {len(full_dataset)}")
 
