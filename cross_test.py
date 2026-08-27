@@ -21,7 +21,7 @@ def get_dataset_class(dataset_type: str):
 
 # 27 个模型配置列表
 MODELS = [
-    "ResNet18", "ResNet34", "ResNet50", "ResNet101", "ResNet152",
+     "ResNet50", "ResNet152",
     "vit_base", "clip_vit_l14", "swin_v2_base", "convnext_large", "convnextv2_tiny",
     "efficientvit_m2", "efficientformerv2_s", "dinov2_base", "internimage_base",
     "mobilevitv3_small", "fastvit_sa12", "eva02_large", "starnet", "mobilenetv4_small",

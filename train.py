@@ -137,6 +137,10 @@ def main():
     
     # 提取数据集名称与子类型，构建多级输出文件夹
     dataset_name = cfg['dataset']['name']
+    model_type = cfg['model']['type']
+    
+    # ✅ 调整顺序：先生成 exp_name，再构造 save_dir
+    exp_name = f"{model_type}_exp1" if not model_type.endswith("_base") else f"{model_type[:-5]}_exp1"
     
     if sub_type:
         save_dir = os.path.join("outputs", dataset_name, sub_type, today_date, exp_name)
@@ -144,9 +148,6 @@ def main():
     else:
         save_dir = os.path.join("outputs", dataset_name, today_date, exp_name)
         log_prefix = dataset_name
-    
-    model_type = cfg['model']['type']
-    exp_name = f"{model_type}_exp1" if not model_type.endswith("_base") else f"{model_type[:-5]}_exp1"
     
     save_dir = os.path.join("outputs", dataset_name, sub_type, today_date, exp_name) if sub_type else os.path.join("outputs", dataset_name, today_date, exp_name)
     ckpt_dir = os.path.join(save_dir, "checkpoints")
