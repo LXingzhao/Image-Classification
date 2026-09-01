@@ -1,0 +1,13 @@
+# configs/yolo12_cls.yaml
+
+model:
+  name: "yolo12n-cls.pt"  # 使用 YOLO12 的分类模型预训练权重
+  type: "yolo12_cls"
+
+train:
+  batch_size: 32
+  lr: 0.001
+  weight_decay: 0.0005
+  epochs: 100
+  imgsz: 224              # 分类任务的标准输入分辨率通常为 224x224
+  optimizer: "AdamW"

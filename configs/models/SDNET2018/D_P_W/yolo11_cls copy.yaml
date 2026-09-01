@@ -1,9 +1,0 @@
-#configs/yolo11_cls.yaml
-model:
-  name: "yolo11n-cls.pt"
-  type: "yolo11_cls"
-
-train:
-  batch_size: 32
-  lr: 0.001
-  weight_decay: 0.0005
