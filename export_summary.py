@@ -159,7 +159,7 @@ def main():
     parser.add_argument("--dataset", type=str, default="SDNET2018_D", help="目标数据集输出子目录名称")
     args = parser.parse_args()
 
-    dataset_dir = os.path.join("outputs", args.dataset)
+    dataset_dir = os.path.normpath(os.path.join("outputs", args.dataset))
     if not os.path.exists(dataset_dir):
         print(f"[错误] 数据集目录不存在: {dataset_dir}")
         return
@@ -226,7 +226,8 @@ def main():
     remaining_cols = [c for c in df.columns if c not in existing_cols]
     df = df[existing_cols + remaining_cols]
 
-    output_excel_path = os.path.join(dataset_dir, f"{args.dataset}_summary.xlsx")
+    safe_filename = args.dataset.replace("/", "_").replace("\\", "_")
+    output_excel_path = os.path.join(dataset_dir, f"{safe_filename}_summary.xlsx")
     
     with pd.ExcelWriter(output_excel_path, engine='openpyxl') as writer:
         df.to_excel(writer, sheet_name="模型评估汇总", index=False)
