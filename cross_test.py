@@ -204,7 +204,12 @@ def main():
     print(f"\n>>>> 正在处理模型: {model_name} <<<<")
 
     for source_sub in SUBTYPES:
-      source_dataset_output_name = f"{DATASET_NAME}_{source_sub}"
+      if source_sub == "D_P_W":
+        # 对应 outputs/SDNET2018/D_P_W
+        source_dataset_output_name = os.path.join(DATASET_NAME, "D_P_W")
+      else:
+        # 对应 outputs/SDNET2018_D, outputs/SDNET2018_P, outputs/SDNET2018_W
+        source_dataset_output_name = f"{DATASET_NAME}_{source_sub}"
       cfg = load_merged_config(model_name, DATASET_NAME, source_sub)
       model_type = cfg["model"]["type"]
 
