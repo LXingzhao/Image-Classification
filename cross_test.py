@@ -57,32 +57,45 @@ TARGET_SUBTYPES = ["D", "P", "W"]  # 测试目标仍为 D, P, W 三个子集
 DATASET_NAME = "SDNET2018"
 
 
-def find_best_ckpt(dataset_output_name, model_type):
-  """自动查找对应子集下模型的 best.pth 路径"""
+def find_best_ckpt(dataset_name, source_sub, model_type):
+  """优先搜索 outputs/SDNET2018/source_sub，找不到再搜索 outputs/SDNET2018_source_sub
+
+  自动递归查找匹配的 best.pth
+  """
   exp_name = (
       f"{model_type}_exp1"
       if not model_type.endswith("_base")
       else f"{model_type[:-5]}_exp1"
   )
-  outputs_root = os.path.join("outputs", dataset_output_name)
 
-  if not os.path.exists(outputs_root):
-    return None
+  # 构建候选搜索根目录列表（按优先级排列）
+  candidate_roots = []
+  if source_sub == "D_P_W":
+    candidate_roots.append(os.path.join("outputs", dataset_name, "D_P_W"))
+  else:
+    # 1. 优先搜索新路径：outputs/SDNET2018/D (或 P, W)
+    candidate_roots.append(os.path.join("outputs", dataset_name, source_sub))
+    # 2. 备选搜索旧路径：outputs/SDNET2018_D (或 P, W)
+    candidate_roots.append(os.path.join("outputs", f"{dataset_name}_{source_sub}"))
 
-  all_dates = sorted(
-      [
-          d
-          for d in os.listdir(outputs_root)
-          if os.path.isdir(os.path.join(outputs_root, d))
-      ],
-      reverse=True,
-  )
-  for date_dir in all_dates:
-    target_path = os.path.join(
-        outputs_root, date_dir, exp_name, "checkpoints", "best.pth"
-    )
-    if os.path.exists(target_path):
-      return target_path
+  # 依次在候选路径中递归查找
+  for outputs_root in candidate_roots:
+    if not os.path.exists(outputs_root):
+      continue
+
+    matched_paths = []
+    # 递归遍历目录，找到匹配 experiment 名称下的 best.pth
+    for root, dirs, files in os.walk(outputs_root):
+      if "best.pth" in files and root.endswith(
+          os.path.join(exp_name, "checkpoints")
+      ):
+        matched_paths.append(os.path.join(root, "best.pth"))
+
+    if matched_paths:
+      # 按日期倒序，确保拿到最新的 best.pth
+      matched_paths.sort(reverse=True)
+      return matched_paths[0]
+
   return None
 
 
@@ -193,131 +206,122 @@ def save_txt_report(df, txt_file_path):
 
 
 def main():
-  device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-  print("=" * 60)
-  print(" 开始 SDNET2018 全模型 [同域 + 跨域 + 全域] 矩阵评估")
-  print(f" 运行设备: {device}")
-  print("=" * 60)
-
-  summary_results = []
-
-  for model_name in MODELS:
-    print(f"\n>>>> 正在处理模型: {model_name} <<<<")
-
-    for source_sub in SUBTYPES:
-      if source_sub == "D_P_W":
-        # 对应 outputs/SDNET2018/D_P_W
-        source_dataset_output_name = os.path.join(DATASET_NAME, "D_P_W")
-      else:
-        # 对应 outputs/SDNET2018_D, outputs/SDNET2018_P, outputs/SDNET2018_W
-        source_dataset_output_name = f"{DATASET_NAME}_{source_sub}"
-      cfg = load_merged_config(model_name, DATASET_NAME, source_sub)
-      model_type = cfg["model"]["type"]
-
-      # 查找特定权重 (D, P, W 或 D_P_W)
-      best_pth = find_best_ckpt(source_dataset_output_name, model_type)
-      if not best_pth:
-        print(
-            f"  [跳过] 未找到 {model_name} 在【{source_dataset_output_name}】下的"
-            " best.pth"
-        )
-        continue
-
-      # 预加载与初始化模型
-      try:
-        _, processor = build_model_and_processor(
-            cfg["model"]["name"], num_classes=2, class_names=[]
-        )
-        model, _ = build_model_and_processor(
-            cfg["model"]["name"], num_classes=2, class_names=["0", "1"]
-        )
-        checkpoint = torch.load(best_pth, map_location=device)
-        state_dict = (
-            checkpoint["model"]
-            if isinstance(checkpoint, dict) and "model" in checkpoint
-            else checkpoint
-        )
-        model.load_state_dict(state_dict, strict=False)
-        model.to(device)
-      except Exception as e:
-        print(
-            f"  [错误] 加载模型/权重 {model_name} ({source_sub}) 失败: {e}"
-        )
-        continue
-
-      # 评估 D, P, W 三个测试子集
-      for target_sub in TARGET_SUBTYPES:
-        DatasetClass = get_dataset_class(cfg["dataset"]["type"])
-        target_dataset = DatasetClass(
-            cfg["dataset"]["dir"], processor, sub_type=target_sub
-        )
-
-        total_size = len(target_dataset)
-        train_size = int(cfg["dataset"]["train_split"] * total_size)
-        val_size = int(cfg["dataset"]["val_split"] * total_size)
-        test_size = total_size - train_size - val_size
-
-        _, _, test_dataset = random_split(
-            target_dataset,
-            [train_size, val_size, test_size],
-            generator=torch.Generator().manual_seed(cfg["seed"]),
-        )
-
-        batch_size = int(cfg["train"].get("batch_size", 32))
-        test_loader = DataLoader(
-            test_dataset, batch_size=batch_size, shuffle=False
-        )
-
-        acc, precision, recall, f1 = evaluate_on_target(
-            model, test_loader, device
-        )
-
-        if source_sub == target_sub:
-          tag = "同域"
-        elif source_sub == "D_P_W":
-          tag = "全域"
-        else:
-          tag = "跨域"
-
-        print(
-            f"  ↳ [{source_sub}权重 -> {target_sub}测试集] ({tag}) | Acc:"
-            f" {acc*100:.2f}% | F1: {f1:.4f}"
-        )
-
-        summary_results.append({
-            "模型名称": model_name,
-            "权重来源(Source)": source_sub,
-            "测试目标(Target)": target_sub,
-            "测试集样本数": len(test_dataset),
-            "Accuracy (%)": round(acc * 100, 2),
-            "Precision": round(precision, 4),
-            "Recall": round(recall, 4),
-            "F1-Score": round(f1, 4),
-            "权重路径": best_pth,
-        })
-
-  # 导出结果文件为“模型详情”
-  if summary_results:
-    target_dir = os.path.join("outputs", "SDNET2018")
-    os.makedirs(target_dir, exist_ok=True)
-
-    txt_save_path = os.path.join(target_dir, "模型详情.txt")
-    csv_save_path = os.path.join(target_dir, "模型详情.csv")
-
-    df = pd.DataFrame(summary_results)
-    df.to_csv(csv_save_path, index=False, encoding="utf-8-sig")
-    save_txt_report(df, txt_save_path)
-
-    print("\n" + "=" * 60)
-    print("[完成] 所有矩阵评估任务结束！")
-    print(f" TXT 结果文件已保存至: {txt_save_path}")
-    print(f" CSV 结果文件已保存至: {csv_save_path}")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("=" * 60)
-  else:
-    print(
-        "\n[警告] 未检测到有效的权重文件，请确保模型已成功训练。"
-    )
+    print(" 开始 SDNET2018 全模型 [同域 + 跨域 + 全域] 矩阵评估")
+    print(f" 运行设备: {device}")
+    print("=" * 60)
+
+    summary_results = []
+
+    for model_name in MODELS:
+        print(f"\n>>>> 正在处理模型: {model_name} <<<<")
+
+        for source_sub in SUBTYPES:
+            cfg = load_merged_config(model_name, DATASET_NAME, source_sub)
+            model_type = cfg["model"]["type"]
+
+            # 优先查找 SDNET2018/source_sub，找不到再查找 SDNET2018_source_sub
+            best_pth = find_best_ckpt(DATASET_NAME, source_sub, model_type)
+            if not best_pth:
+                print(f"  [跳过] 未找到 {model_name} 在【{source_sub}】子集下的 best.pth")
+                continue
+
+            # 预加载与初始化模型
+            try:
+                _, processor = build_model_and_processor(
+                    cfg["model"]["name"], num_classes=2, class_names=[]
+                )
+                model, _ = build_model_and_processor(
+                    cfg["model"]["name"], num_classes=2, class_names=["0", "1"]
+                )
+                checkpoint = torch.load(best_pth, map_location=device)
+                state_dict = (
+                    checkpoint["model"]
+                    if isinstance(checkpoint, dict) and "model" in checkpoint
+                    else checkpoint
+                )
+                model.load_state_dict(state_dict, strict=False)
+                model.to(device)
+            except Exception as e:
+                print(
+                    f"  [错误] 加载模型/权重 {model_name} ({source_sub}) 失败: {e}"
+                )
+                continue
+
+            # 评估 D, P, W 三个测试子集
+            for target_sub in TARGET_SUBTYPES:
+                DatasetClass = get_dataset_class(cfg["dataset"]["type"])
+                target_dataset = DatasetClass(
+                    cfg["dataset"]["dir"], processor, sub_type=target_sub
+                )
+
+                total_size = len(target_dataset)
+                train_size = int(cfg["dataset"]["train_split"] * total_size)
+                val_size = int(cfg["dataset"]["val_split"] * total_size)
+                test_size = total_size - train_size - val_size
+
+                _, _, test_dataset = random_split(
+                    target_dataset,
+                    [train_size, val_size, test_size],
+                    generator=torch.Generator().manual_seed(cfg["seed"]),
+                )
+
+                batch_size = int(cfg["train"].get("batch_size", 32))
+                test_loader = DataLoader(
+                    test_dataset, batch_size=batch_size, shuffle=False
+                )
+
+                acc, precision, recall, f1 = evaluate_on_target(
+                    model, test_loader, device
+                )
+
+                if source_sub == target_sub:
+                    tag = "同域"
+                elif source_sub == "D_P_W":
+                    tag = "全域"
+                else:
+                    tag = "跨域"
+
+                print(
+                    f"  ↳ [{source_sub}权重 -> {target_sub}测试集] ({tag}) | Acc:"
+                    f" {acc*100:.2f}% | F1: {f1:.4f}"
+                )
+
+                summary_results.append({
+                    "模型名称": model_name,
+                    "权重来源(Source)": source_sub,
+                    "测试目标(Target)": target_sub,
+                    "测试集样本数": len(test_dataset),
+                    "Accuracy (%)": round(acc * 100, 2),
+                    "Precision": round(precision, 4),
+                    "Recall": round(recall, 4),
+                    "F1-Score": round(f1, 4),
+                    "权重路径": best_pth,
+                })
+
+    # 导出结果文件为“模型详情”
+    if summary_results:
+        target_dir = os.path.join("outputs", "SDNET2018")
+        os.makedirs(target_dir, exist_ok=True)
+
+        txt_save_path = os.path.join(target_dir, "模型详情.txt")
+        csv_save_path = os.path.join(target_dir, "模型详情.csv")
+
+        df = pd.DataFrame(summary_results)
+        df.to_csv(csv_save_path, index=False, encoding="utf-8-sig")
+        save_txt_report(df, txt_save_path)
+
+        print("\n" + "=" * 60)
+        print("[完成] 所有矩阵评估任务结束！")
+        print(f" TXT 结果文件已保存至: {txt_save_path}")
+        print(f" CSV 结果文件已保存至: {csv_save_path}")
+        print("=" * 60)
+    else:
+        print(
+            "\n[警告] 未检测到有效的权重文件，请确保模型已成功训练。"
+        )
 
 
 if __name__ == "__main__":
-  main()
+    main()
