@@ -22,7 +22,7 @@ def get_dataset_class(dataset_type: str):
     raise ValueError(f"当前跨域测试仅支持 SDNET2018，未知类型: {dataset_type}")
 
 
-# 24 个模型配置列表
+# 25 个模型配置列表
 MODELS = [
     "ResNet50",
     "ResNet152",
