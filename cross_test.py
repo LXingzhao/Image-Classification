@@ -48,6 +48,7 @@ MODELS = [
     "tinyvim_base",
     "sam2_hiera_base",
     "mobileclip2_b",
+    "yolo26_cls",
 ]
 
 # 新增 "D_P_W" 权重来源
