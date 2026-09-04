@@ -1,0 +1,10 @@
+# configs/models/SDNET2018/D/yolo26_cls.yaml
+
+model:
+  name: "yolo26n-cls.pt"  # 若无对应权重，可先替换为 yolo11n-cls.pt 或 yolo12n-cls.pt
+  type: "yolo26_cls"
+
+train:
+  batch_size: 32
+  lr: 0.001
+  weight_decay: 0.0005
