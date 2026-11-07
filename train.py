@@ -1,4 +1,3 @@
-# train.py
 import os
 import sys
 import time
@@ -218,6 +217,50 @@ def main():
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+
+# ---------------------------------------------------------
+    # 5.1 【新增】保存数据集划分情况（记录每个集的图片路径与标签）
+    # ---------------------------------------------------------
+    def get_subset_info(subset, dataset_name_str):
+        subset_info = []
+        for idx in subset.indices:
+            # 兼容处理可能嵌套或直接映射的 dataset
+            real_idx = idx
+            # 获取图片路径（兼容不同自定义 Dataset 的结构）
+            if hasattr(full_dataset, 'samples'):
+                img_path = full_dataset.samples[real_idx][0]
+                label_idx = full_dataset.samples[real_idx][1]
+            elif hasattr(full_dataset, 'imgs'):
+                img_path = full_dataset.imgs[real_idx][0]
+                label_idx = full_dataset.imgs[real_idx][1]
+            else:
+                # Fallback: 直接从 dataset 获取
+                item = full_dataset[real_idx]
+                img_path = getattr(item, 'path', f"index_{real_idx}")
+                label_idx = item[1] if isinstance(item, (tuple, list)) else -1
+            
+            subset_info.append({
+                "path": img_path,
+                "filename": os.path.basename(img_path) if isinstance(img_path, str) else str(real_idx),
+                "label": int(label_idx),
+                "class_name": class_names[label_idx] if 0 <= label_idx < len(class_names) else "unknown"
+            })
+        return subset_info
+
+    split_summary = {
+        "seed": cfg['seed'],
+        "train_count": len(train_dataset),
+        "val_count": len(val_dataset),
+        "test_count": len(test_dataset),
+        "train_samples": get_subset_info(train_dataset, "train"),
+        "val_samples": get_subset_info(val_dataset, "val"),
+        "test_samples": get_subset_info(test_dataset, "test")
+    }
+
+    split_json_path = os.path.join(save_dir, "dataset_split.json")
+    with open(split_json_path, "w", encoding="utf-8") as f:
+        json.dump(split_summary, f, indent=4, ensure_ascii=False)
+    print(f"[数据划分] 训练/验证/测试集详细划分名单已保存至: {split_json_path}")
 
     # ---------------------------------------------------------
     # 6. 训练准备与主循环

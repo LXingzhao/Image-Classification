@@ -22,6 +22,7 @@ best_vit_gyu_model/
 tensorboard/
 wandb/
 .wandb/
+*.png
 
 # 忽略所有模型权重文件和大文件
 *.pth
